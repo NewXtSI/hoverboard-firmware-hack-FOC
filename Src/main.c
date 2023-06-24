@@ -84,6 +84,11 @@ extern uint8_t enable;                  // global variable for motor enable
 
 extern int16_t batVoltage;              // global variable for battery voltage
 
+#if defined(CRUISE_CONTROL_SUPPORT) || (defined(STANDSTILL_HOLD_ENABLE) && (CTRL_TYP_SEL == FOC_CTRL) && (CTRL_MOD_REQ != SPD_MODE))
+extern uint8_t cruiseCtrlAcv;
+extern uint8_t standstillAcv;
+#endif
+
 #if defined(SIDEBOARD_SERIAL_USART2)
 extern SerialSideboard Sideboard_L;
 #endif
@@ -126,6 +131,7 @@ typedef struct{
   int16_t   batVoltage;
   int16_t   boardTemp;
   uint16_t  cmdLed;
+  int16_t  current;
   uint16_t  checksum;
 } SerialFeedback;
 static SerialFeedback Feedback;
@@ -207,7 +213,7 @@ int main(void) {
   HAL_ADC_Start(&hadc1);
   HAL_ADC_Start(&hadc2);
 
-  poweronMelody();
+  //poweronMelody();
   HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);
   
   int32_t board_temp_adcFixdt = adc_buffer.temp << 16;  // Fixed-point filter output initialized with current ADC converted to fixed-point
@@ -528,9 +534,16 @@ int main(void) {
         #endif
         #if defined(FEEDBACK_SERIAL_USART3)
           if(__HAL_DMA_GET_COUNTER(huart3.hdmatx) == 0) {
+#ifdef ESP32_USART_CONTROL
+            // cruiseCtrlAcv
+            // standstillAcv
+            Feedback.cmdLed = (cruiseCtrlAcv << 0) | (standstillAcv << 0);
+            Feedback.current    = (int16_t)dc_curr;
+#else
             Feedback.cmdLed     = (uint16_t)sideboard_leds_R;
+#endif            
             Feedback.checksum   = (uint16_t)(Feedback.start ^ Feedback.cmd1 ^ Feedback.cmd2 ^ Feedback.speedR_meas ^ Feedback.speedL_meas 
-                                           ^ Feedback.batVoltage ^ Feedback.boardTemp ^ Feedback.cmdLed);
+                                           ^ Feedback.batVoltage ^ Feedback.boardTemp ^ Feedback.cmdLed ^ Feedback.current);
 
             HAL_UART_Transmit_DMA(&huart3, (uint8_t *)&Feedback, sizeof(Feedback));
           }
@@ -557,8 +570,8 @@ int main(void) {
       beepCount(1, 24, 1);
     } else if (timeoutFlgADC) {                                                                       // 2 beeps (low pitch): ADC timeout
       beepCount(2, 24, 1);
-    } else if (timeoutFlgSerial) {                                                                    // 3 beeps (low pitch): Serial timeout
-      beepCount(3, 24, 1);
+//    } else if (timeoutFlgSerial) {                                                                    // 3 beeps (low pitch): Serial timeout
+//      beepCount(3, 24, 1);
     } else if (timeoutFlgGen) {                                                                       // 4 beeps (low pitch): General timeout (PPM, PWM, Nunchuk)
       beepCount(4, 24, 1);
     } else if (TEMP_WARNING_ENABLE && board_temp_deg_c >= TEMP_WARNING) {                             // 5 beeps (low pitch): Mainboard temperature warning

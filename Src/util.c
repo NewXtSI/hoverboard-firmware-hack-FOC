@@ -196,8 +196,8 @@ static uint8_t brakePressed;
 #endif
 
 #if defined(CRUISE_CONTROL_SUPPORT) || (defined(STANDSTILL_HOLD_ENABLE) && (CTRL_TYP_SEL == FOC_CTRL) && (CTRL_MOD_REQ != SPD_MODE))
-static uint8_t cruiseCtrlAcv = 0;
-static uint8_t standstillAcv = 0;
+uint8_t cruiseCtrlAcv = 0;
+uint8_t standstillAcv = 0;
 #endif
 
 /* =========================== Retargeting printf =========================== */
@@ -734,6 +734,20 @@ void electricBrake(uint16_t speedBlend, uint8_t reverseDir) {
  * Input: button (as a pulse)
  * Output: cruiseCtrlAcv
  */
+
+#ifdef ESP32_USART_CONTROL
+void cruiseControlEnable(uint8_t bEnable) {
+    if (bEnable) {
+        if (!cruiseCtrlAcv) {
+            cruiseControl(1);
+        }
+    } else {
+        if (cruiseCtrlAcv) {
+            cruiseControl(1);
+        }
+    }
+}
+#endif
 void cruiseControl(uint8_t button) {
   #ifdef CRUISE_CONTROL_SUPPORT
     if (button && !rtP_Left.b_cruiseCtrlEna) {                          // Cruise control activated
@@ -878,6 +892,13 @@ void readInputRaw(void) {
       #else
         input1[inIdx].raw = commandR.steer;
         input2[inIdx].raw = commandR.speed;
+
+#ifdef ESP32_USART_CONTROL
+        if (commandR.uiControl && (1 << 0))
+          cruiseControlEnable(1);
+        else
+          cruiseControlEnable(0);
+#endif
       #endif
     }
     #endif
@@ -1273,7 +1294,11 @@ void usart_process_command(SerialCommand *command_in, SerialCommand *command_out
   #else
   uint16_t checksum;
   if (command_in->start == SERIAL_START_FRAME) {
+#ifdef ESP32_USART_CONTROL
+    checksum = (uint16_t)(command_in->start ^ command_in->steer ^ command_in->speed ^ command_in->uiControl);
+#else
     checksum = (uint16_t)(command_in->start ^ command_in->steer ^ command_in->speed);
+#endif
     if (command_in->checksum == checksum) {
       *command_out = *command_in;
       if (usart_idx == 2) {             // Sideboard USART2
@@ -1543,12 +1568,13 @@ void poweroff(void) {
   #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
   printf("-- Motors disabled --\r\n");
   #endif
+/*  
   buzzerCount = 0;  // prevent interraction with beep counter
   buzzerPattern = 0;
   for (int i = 0; i < 8; i++) {
     buzzerFreq = (uint8_t)i;
     HAL_Delay(100);
-  }
+  }*/
   saveConfig();
   HAL_GPIO_WritePin(OFF_PORT, OFF_PIN, GPIO_PIN_RESET);
   while(1) {}

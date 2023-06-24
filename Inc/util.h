@@ -39,6 +39,9 @@
       uint16_t  start;
       int16_t   steer;
       int16_t   speed;
+#ifdef ESP32_USART_CONTROL
+      uint16_t  uiControl;
+#endif
       uint16_t  checksum;
     } SerialCommand;
   #endif
@@ -84,6 +87,9 @@ void adcCalibLim(void);
 void updateCurSpdLim(void);
 void standstillHold(void);
 void electricBrake(uint16_t speedBlend, uint8_t reverseDir);
+#ifdef ESP32_USART_CONTROL
+void cruiseControlEnable(uint8_t bEnable);
+#endif
 void cruiseControl(uint8_t button);
 int  checkInputType(int16_t min, int16_t mid, int16_t max);
 
