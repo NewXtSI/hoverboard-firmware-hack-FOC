@@ -1,0 +1,3 @@
+[submodule "KiSC-hoverboard-protocol"]
+	path = KiSC-hoverboard-protocol
+	url = https://github.com/NewXtSI/KiSC-hoverboard-protocol
