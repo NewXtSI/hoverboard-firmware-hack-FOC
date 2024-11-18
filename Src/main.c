@@ -31,6 +31,10 @@
 #include "rtwtypes.h"
 #include "comms.h"
 
+#ifdef VARIANT_KiSC
+#include "kisc-hoverboard-protocol.h"
+#endif
+
 #if defined(DEBUG_I2C_LCD) || defined(SUPPORT_LCD)
 #include "hd44780.h"
 #endif
