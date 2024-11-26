@@ -31,6 +31,10 @@
 #include "rtwtypes.h"
 #include "comms.h"
 
+#ifdef VARIANT_KiSC
+#include "kisc-hoverboard-protocol.h"
+#endif
+
 #if defined(DEBUG_I2C_LCD) || defined(SUPPORT_LCD)
 #include "hd44780.h"
 #endif
@@ -178,8 +182,10 @@ static uint32_t commandL_len = sizeof(commandL);
 #endif
 
 #if defined(CONTROL_SERIAL_USART3)
+#ifdef VARIANT_KiSC
 static SerialCommand commandR;
 static SerialCommand commandR_raw;
+#endif
 static uint32_t commandR_len = sizeof(commandR);
   #ifdef CONTROL_IBUS
   static uint16_t ibusR_captured_value[IBUS_NUM_CHANNELS];
@@ -890,14 +896,22 @@ void readInputRaw(void) {
         input1[inIdx].raw = (ibusR_captured_value[0] - 500) * 2;
         input2[inIdx].raw = (ibusR_captured_value[1] - 500) * 2; 
       #else
-        input1[inIdx].raw = commandR.steer;
-        input2[inIdx].raw = commandR.speed;
+        input1[inIdx].raw = commandR.left.pwm;
+        input2[inIdx].raw = commandR.right.pwm;
 
+#ifdef VARIANT_KiSC
+        if (commandR.cruiseCtrlAcv) {
+          cruiseControlEnable(1);
+        } else {
+          cruiseControlEnable(0);
+        }
+#else
 #ifdef ESP32_USART_CONTROL
         if (commandR.uiControl && (1 << 0))
           cruiseControlEnable(1);
         else
           cruiseControlEnable(0);
+#endif
 #endif
       #endif
     }
@@ -1294,10 +1308,14 @@ void usart_process_command(SerialCommand *command_in, SerialCommand *command_out
   #else
   uint16_t checksum;
   if (command_in->start == SERIAL_START_FRAME) {
+#ifdef VARIANT_KiSC    
+    checksum = calculateCommandChecksum(*command_in);
+#else
 #ifdef ESP32_USART_CONTROL
     checksum = (uint16_t)(command_in->start ^ command_in->steer ^ command_in->speed ^ command_in->uiControl);
 #else
     checksum = (uint16_t)(command_in->start ^ command_in->steer ^ command_in->speed);
+#endif
 #endif
     if (command_in->checksum == checksum) {
       *command_out = *command_in;

@@ -18,11 +18,14 @@
 */
 
 // Define to prevent recursive inclusion
-#ifndef UTIL_H
-#define UTIL_H
+#ifndef INCLUDE_UTIL_INCLUDED
+#define INCLUDE_UTIL_INCLUDED
 
 #include <stdint.h>
 
+#ifdef VARIANT_KiSC
+#include "kisc-hoverboard-protocol.h"
+#endif
 
 // Rx Structures USART
 #if defined(CONTROL_SERIAL_USART2) || defined(CONTROL_SERIAL_USART3)
@@ -35,6 +38,7 @@
       uint8_t  checksumh;
     } SerialCommand;
   #else
+#ifndef VARIANT_KiSC  
     typedef struct{
       uint16_t  start;
       int16_t   steer;
@@ -44,6 +48,7 @@
 #endif
       uint16_t  checksum;
     } SerialCommand;
+#endif    
   #endif
 #endif
 #if defined(SIDEBOARD_SERIAL_USART2) || defined(SIDEBOARD_SERIAL_USART3)
@@ -133,5 +138,5 @@ typedef struct {
 } MultipleTap;
 void multipleTapDet(int16_t u, uint32_t timeNow, MultipleTap *x);
 
-#endif
+#endif  /* INCLUDE_UTIL_INCLUDED */
 
