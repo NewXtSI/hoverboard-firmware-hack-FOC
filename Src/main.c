@@ -546,7 +546,7 @@ int main(void) {
         #if defined(FEEDBACK_SERIAL_USART3)
           if(__HAL_DMA_GET_COUNTER(huart3.hdmatx) == 0) {
 #ifdef ESP32_USART_CONTROL
-            // cruiseCtrlAcv
+            // cruiseCtrlAcv0
             // standstillAcv
 #ifndef VARIANT_KiSC
             Feedback.cmdLed = (cruiseCtrlAcv << 0) | (standstillAcv << 0);
@@ -570,7 +570,7 @@ int main(void) {
             Feedback.left.error = (int16_t)rtY_Left.z_errCode;
             Feedback.right.error = (int16_t)rtY_Right.z_errCode;
 
-  	      Feedback.electricBrakeAmount = electricBrakeAmount;
+  	        Feedback.electricBrakeAmount = electricBrakeAmount;
 
             Feedback.checksum  = calculateFeedbackChecksum(Feedback);      
 #else            
@@ -603,8 +603,8 @@ int main(void) {
       beepCount(1, 24, 1);
     } else if (timeoutFlgADC) {                                                                       // 2 beeps (low pitch): ADC timeout
       beepCount(2, 24, 1);
-//    } else if (timeoutFlgSerial) {                                                                    // 3 beeps (low pitch): Serial timeout
-//      beepCount(3, 24, 1);
+    } else if (timeoutFlgSerial) {                                                                    // 3 beeps (low pitch): Serial timeout
+      beepCount(3, 24, 1);
     } else if (timeoutFlgGen) {                                                                       // 4 beeps (low pitch): General timeout (PPM, PWM, Nunchuk)
       beepCount(4, 24, 1);
     } else if (TEMP_WARNING_ENABLE && board_temp_deg_c >= TEMP_WARNING) {                             // 5 beeps (low pitch): Mainboard temperature warning

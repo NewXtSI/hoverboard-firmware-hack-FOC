@@ -1307,10 +1307,11 @@ void usart_process_command(SerialCommand *command_in, SerialCommand *command_out
     }
   #else
   uint16_t checksum;
-  if (command_in->start == SERIAL_START_FRAME) {
 #ifdef VARIANT_KiSC    
+  if (command_in->start == VALID_HEADER) {
     checksum = calculateCommandChecksum(*command_in);
-#else
+#else    
+  if (command_in->start == SERIAL_START_FRAME) {
 #ifdef ESP32_USART_CONTROL
     checksum = (uint16_t)(command_in->start ^ command_in->steer ^ command_in->speed ^ command_in->uiControl);
 #else
