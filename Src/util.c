@@ -33,6 +33,7 @@
 
 #ifdef VARIANT_KiSC
 #include "kisc-hoverboard-protocol.h"
+#include "new-protocol.h"
 #endif
 
 #if defined(DEBUG_I2C_LCD) || defined(SUPPORT_LCD)
@@ -675,6 +676,27 @@ void updateCurSpdLim(void) {
  * Output: standstillAcv
  */
 void standstillHold(void) {
+#ifdef VARIANT_KiSC
+  #if defined(STANDSTILL_HOLD_ENABLE) && (CTRL_TYP_SEL == FOC_CTRL) && (CTRL_MOD_REQ != SPD_MODE)
+    if (!rtP_Left.b_cruiseCtrlEna) {                                  // If Stanstill in NOT Active -> try Activation
+      if (((input1[inIdx].cmd < 20 || input2[inIdx].cmd < 20) && speedAvgAbs < 30) // Check if Brake is pressed AND measured speed is small
+          || (input2[inIdx].cmd < 20 && speedAvgAbs < 5)) {           // OR Throttle is small AND measured speed is very small
+        rtP_Left.n_cruiseMotTgt   = 0;
+        rtP_Right.n_cruiseMotTgt  = 0;
+        rtP_Left.b_cruiseCtrlEna  = 1;
+        rtP_Right.b_cruiseCtrlEna = 1;
+        standstillAcv = 1;
+      } 
+    }
+    else {                                                            // If Stanstill is Active -> try Deactivation
+      if (input1[inIdx].cmd > 20 && input2[inIdx].cmd > 20 && !cruiseCtrlAcv) { // Check if Brake is released AND Throttle is pressed AND no Cruise Control
+        rtP_Left.b_cruiseCtrlEna  = 0;
+        rtP_Right.b_cruiseCtrlEna = 0;
+        standstillAcv = 0;
+      }
+    }
+  #endif
+#else  
   #if defined(STANDSTILL_HOLD_ENABLE) && (CTRL_TYP_SEL == FOC_CTRL) && (CTRL_MOD_REQ != SPD_MODE)
     if (!rtP_Left.b_cruiseCtrlEna) {                                  // If Stanstill in NOT Active -> try Activation
       if (((input1[inIdx].cmd > 50 || input2[inIdx].cmd < -50) && speedAvgAbs < 30) // Check if Brake is pressed AND measured speed is small
@@ -694,6 +716,7 @@ void standstillHold(void) {
       }
     }
   #endif
+#endif  
 }
 
  /*
@@ -882,8 +905,18 @@ void readInputRaw(void) {
         input1[inIdx].raw = (ibusL_captured_value[0] - 500) * 2;
         input2[inIdx].raw = (ibusL_captured_value[1] - 500) * 2; 
       #else
+#ifdef VARIANT_KiSC
+        input1[inIdx].cmd = commandL.left.pwm;
+        input2[inIdx].cmd = commandL.right.pwm;
+        if (commandL.cruiseCtrlAcv) {
+          cruiseControlEnable(1);
+        } else {
+          cruiseControlEnable(0);
+        }
+#else
         input1[inIdx].raw = commandL.steer;
         input2[inIdx].raw = commandL.speed;
+#endif        
       #endif
     }
     #endif
@@ -896,10 +929,9 @@ void readInputRaw(void) {
         input1[inIdx].raw = (ibusR_captured_value[0] - 500) * 2;
         input2[inIdx].raw = (ibusR_captured_value[1] - 500) * 2; 
       #else
-        input1[inIdx].raw = commandR.left.pwm;
-        input2[inIdx].raw = commandR.right.pwm;
-
 #ifdef VARIANT_KiSC
+        input1[inIdx].cmd = commandR.left.pwm;
+        input2[inIdx].cmd = commandR.right.pwm;
         if (commandR.cruiseCtrlAcv) {
           cruiseControlEnable(1);
         } else {
@@ -1013,6 +1045,7 @@ void handleTimeout(void) {
       #if (defined(CONTROL_SERIAL_USART2) && CONTROL_SERIAL_USART2 == 0) || (defined(SIDEBOARD_SERIAL_USART2) && SIDEBOARD_SERIAL_USART2 == 0 && !defined(VARIANT_HOVERBOARD))
         timeoutFlgSerial = timeoutFlgSerial_L;          // Report Timeout only on the Primary Input
       #endif
+
     #endif
 
     #if defined(CONTROL_SERIAL_USART3) || defined(SIDEBOARD_SERIAL_USART3)
@@ -1033,6 +1066,9 @@ void handleTimeout(void) {
           inIdx = 1;                                    // Switch to Auxiliary input in case of NO Timeout on Auxiliary input
         #endif
       }
+      #ifdef VARIANT_KiSC
+        timeoutFlgSerial = timeoutFlgSerial_R;          // Report Timeout only on the Primary Input
+      #endif
       #if (defined(CONTROL_SERIAL_USART3) && CONTROL_SERIAL_USART3 == 0) || (defined(SIDEBOARD_SERIAL_USART3) && SIDEBOARD_SERIAL_USART3 == 0 && !defined(VARIANT_HOVERBOARD))
         timeoutFlgSerial = timeoutFlgSerial_R;          // Report Timeout only on the Primary Input
       #endif
@@ -1123,6 +1159,116 @@ void readCommand(void) {
  * Check for new data received on USART2 with DMA: refactored function from https://github.com/MaJerle/stm32-usart-uart-dma-rx-tx
  * - this function is called for every USART IDLE line detection, in the USART interrupt handler
  */
+#if 1
+void usart_process_data(char *data, int16_t len) {
+    static uint8_t ptr_raw[SERIAL_BUFFER_SIZE];
+    static uint8_t inComingPrev = 0;
+    uint8_t inComing;
+    static uint8_t idx = 0;
+    static uint8_t *ptr = (uint8_t *)&commandL_raw;
+    uint16_t bufStartFrame = 0;
+// void usart_process_command(SerialCommand *command_in, SerialCommand *command_out, uint8_t usart_idx)
+    while (len--) {
+        inComing = *data++;
+        bufStartFrame	= ((uint16_t)(inComingPrev) << 8) | inComing;       // Construct the start frame
+        if (bufStartFrame == HOVER_VALID_HEADER) {  // Initialize if new data is detected
+           ptr       = (uint8_t *)&ptr_raw;
+          *ptr++    = inComingPrev;
+          *ptr++    = inComing;
+          idx     = 2;
+        } else if (idx >= 2) {  // Save the new received data
+          *ptr++    = inComing;
+          idx++;
+        }
+        if (idx >= 4) {
+          uint8_t len = ptr_raw[3];
+          if (idx >= len) {
+            uint8_t cmd = ptr_raw[2];
+            uint8_t checksum = 0;
+            for (uint8_t i = 0; i < len - 1; i++) {
+              checksum ^= ptr_raw[i];
+            }
+            if (checksum == ptr_raw[len - 1]) {
+              timeoutFlgSerial_L = 0;         // Clear timeout flag
+              timeoutCntSerial_L = 0;         // Reset timeout counter
+//              usart_process_command((SerialCommand *)ptr_raw, &commandL, 2);
+            }
+            idx = 0;
+
+          }
+        }
+        // Check if we reached the end of the package
+      if (idx > SERIAL_BUFFER_SIZE) {
+        idx = 0;
+        bufStartFrame = 0x0000;
+        // Check if the checksum is correct
+       // if (commandL_raw.checksum == calculateCommandChecksum(commandL_raw)) {
+//            usart_process_command(&commandL_raw, &commandL, 2);
+        timeoutFlgSerial_L = 0;         // Clear timeout flag
+        timeoutCntSerial_L = 0;         // Reset timeout counter
+
+        //}
+    }
+
+        inComingPrev = inComing;
+    }
+
+}
+
+void usart2_rx_check(void) {
+    static size_t old_pos;
+    size_t pos;
+
+    /* Calculate current position in buffer and check for new data available */
+//    pos = ARRAY_LEN(usart_rx_dma_buffer) - LL_DMA_GetDataLength(DMA1, LL_DMA_STREAM_1);
+    pos = rx_buffer_L_len - __HAL_DMA_GET_COUNTER(huart2.hdmarx);
+    if (pos != old_pos) {                       /* Check change in received data */
+        if (pos > old_pos) {                    /* Current position is over previous one */
+            /*
+             * Processing is done in "linear" mode.
+             *
+             * Application processing is fast with single data block,
+             * length is simply calculated by subtracting pointers
+             *
+             * [   0   ]
+             * [   1   ] <- old_pos |------------------------------------|
+             * [   2   ]            |                                    |
+             * [   3   ]            | Single block (len = pos - old_pos) |
+             * [   4   ]            |                                    |
+             * [   5   ]            |------------------------------------|
+             * [   6   ] <- pos
+             * [   7   ]
+             * [ N - 1 ]
+             */
+//            void usart_process_command(SerialCommand *command_in, SerialCommand *command_out, uint8_t usart_idx)
+
+            usart_process_data(&rx_buffer_L[old_pos], pos - old_pos);
+        } else {
+            /*
+             * Processing is done in "overflow" mode..
+             *
+             * Application must process data twice,
+             * since there are 2 linear memory blocks to handle
+             *
+             * [   0   ]            |---------------------------------|
+             * [   1   ]            | Second block (len = pos)        |
+             * [   2   ]            |---------------------------------|
+             * [   3   ] <- pos
+             * [   4   ] <- old_pos |---------------------------------|
+             * [   5   ]            |                                 |
+             * [   6   ]            | First block (len = N - old_pos) |
+             * [   7   ]            |                                 |
+             * [ N - 1 ]            |---------------------------------|
+             */
+            usart_process_data(&rx_buffer_L[old_pos], ARRAY_LEN(rx_buffer_L) - old_pos);
+            if (pos > 0) {
+                usart_process_data(&rx_buffer_L[0], pos);
+            }
+        }
+        old_pos = pos;                          /* Save current position as old for next transfers */
+    }
+}
+#else
 void usart2_rx_check(void)
 {
   #if defined(DEBUG_SERIAL_USART2) || defined(CONTROL_SERIAL_USART2) || defined(SIDEBOARD_SERIAL_USART2)  
@@ -1163,7 +1309,6 @@ void usart2_rx_check(void)
     }
   }
   #endif // CONTROL_SERIAL_USART2
-
   #ifdef SIDEBOARD_SERIAL_USART2
   uint8_t *ptr;	
   if (pos != old_pos) {                                                 // Check change in received data
@@ -1189,6 +1334,7 @@ void usart2_rx_check(void)
   }
 	#endif
 }
+#endif
 
 
 /*
@@ -1221,7 +1367,7 @@ void usart3_rx_check(void)
 
   #ifdef CONTROL_SERIAL_USART3
   uint8_t *ptr;
-  if (pos != old_pos) {                                                 // Check change in received data
+  if (pos != old_pos) {                                                 // Check change in +received data
     ptr = (uint8_t *)&commandR_raw;                                     // Initialize the pointer with command_raw address
     if (pos > old_pos && (pos - old_pos) == commandR_len) {             // "Linear" buffer mode: check if current position is over previous one AND data length equals expected length
       memcpy(ptr, &rx_buffer_R[old_pos], commandR_len);                 // Copy data. This is possible only if command_raw is contiguous! (meaning all the structure members have the same size)
@@ -1309,7 +1455,8 @@ void usart_process_command(SerialCommand *command_in, SerialCommand *command_out
   uint16_t checksum;
 #ifdef VARIANT_KiSC    
   if (command_in->start == VALID_HEADER) {
-    checksum = calculateCommandChecksum(*command_in);
+      checksum = VALID_HEADER;
+//    checksum = calculateCommandChecksum(*command_in);
 #else    
   if (command_in->start == SERIAL_START_FRAME) {
 #ifdef ESP32_USART_CONTROL
@@ -1331,7 +1478,9 @@ void usart_process_command(SerialCommand *command_in, SerialCommand *command_out
         timeoutCntSerial_R = 0;         // Reset timeout counter
         #endif
       }
+    } else {
     }
+
   }
   #endif
 }
@@ -1629,6 +1778,9 @@ void poweroffPressCheck(void) {
         #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
           printf("Powering off, button has been pressed\r\n");
         #endif
+        beepShort(4);                     // make 2 beeps indicating the motor enable
+        beepShort(6); HAL_Delay(100);
+
       poweroff();
       }
     }

@@ -33,6 +33,7 @@
 
 #ifdef VARIANT_KiSC
 #include "kisc-hoverboard-protocol.h"
+#include "new-protocol.h"
 #endif
 
 #if defined(DEBUG_I2C_LCD) || defined(SUPPORT_LCD)
@@ -269,6 +270,7 @@ int main(void) {
     readCommand();                        // Read Command: input1[inIdx].cmd, input2[inIdx].cmd
     calcAvgSpeed();                       // Calculate average measured speed: speedAvg, speedAvgAbs
 
+#ifndef VARIANT_KiSC
     #ifndef VARIANT_TRANSPOTTER
       // ####### MOTOR ENABLING: Only if the initial input is very small (for SAFETY) #######
       if (enable == 0 && !rtY_Left.z_errCode && !rtY_Right.z_errCode && 
@@ -474,6 +476,36 @@ int main(void) {
       transpotter_counter++;
     #endif
 
+  #endif
+    #ifdef VARIANT_KiSC
+      if (enable == 0 && !rtY_Left.z_errCode && !rtY_Right.z_errCode) {
+        beepShort(6);                     // make 2 beeps indicating the motor enable
+        beepShort(4); HAL_Delay(100);
+        steerFixdt = speedFixdt = 0;      // reset filters
+        enable = 1;                       // enable motors
+        #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
+        printf("-- Motors enabled --\r\n");
+        #endif
+        rtP_Left.n_max = rtP_Right.n_max = 500 << 4;
+        rtP_Left.i_max = rtP_Right.i_max = (100 * A2BIT_CONV) << 4;
+        rtU_Right.z_ctrlModReq = rtU_Left.z_ctrlModReq = 0;
+        rtU_Right.b_motEna = 1;
+        rtU_Left.b_motEna = 1;
+      }
+      #ifdef STANDSTILL_HOLD_ENABLE
+        standstillHold();                                           // Apply Standstill Hold functionality. Only available and makes sense for VOLTAGE or TORQUE Mode
+      #endif
+//        input2[inIdx].cmd = 60;
+//        input1[inIdx].cmd = 60;
+        cmdL = input2[inIdx].cmd;
+        cmdR = input1[inIdx].cmd;
+        pwmr = cmdR;
+        pwml = cmdL;
+//      pwmr = CLAMP(input1[inIdx].cmd, 0, 4095) << 4;
+//      pwml = CLAMP(input2[inIdx].cmd, 0, 4095) << 4;
+    #endif
+
+
     // ####### SIDEBOARDS HANDLING #######
     #if defined(SIDEBOARD_SERIAL_USART2)
       sideboardSensors((uint8_t)Sideboard_L.sensors);
@@ -535,6 +567,8 @@ int main(void) {
         Feedback.boardTemp	    = (int16_t)board_temp_deg_c;
 #endif
         #if defined(FEEDBACK_SERIAL_USART2)
+#ifndef VARIANT_KiSC
+            Feedback.cmdLed = (cruiseCtrlAcv << 0) | (standstillAcv << 0);
           if(__HAL_DMA_GET_COUNTER(huart2.hdmatx) == 0) {
             Feedback.cmdLed     = (uint16_t)sideboard_leds_L;
             Feedback.checksum   = (uint16_t)(Feedback.start ^ Feedback.cmd1 ^ Feedback.cmd2 ^ Feedback.speedR_meas ^ Feedback.speedL_meas 
@@ -542,6 +576,55 @@ int main(void) {
 
             HAL_UART_Transmit_DMA(&huart2, (uint8_t *)&Feedback, sizeof(Feedback));
           }
+#else
+            Feedback.start = VALID_HEADER;
+            Feedback.batVoltage = (int16_t)batVoltageCalib;
+            Feedback.boardTemp  = (int16_t)board_temp_deg_c;
+            Feedback.cruiseCtrlAcv = (uint8_t)cruiseCtrlAcv;
+            Feedback.standstillAcv = (uint8_t)standstillAcv;
+
+            Feedback.left.speed = (int16_t)rtY_Left.n_mot;
+            Feedback.left.dcLink = (int16_t)left_dc_curr;
+            Feedback.left.angle = (int16_t)rtU_Left.a_mechAngle;
+            Feedback.left.error = (int16_t)rtY_Left.z_errCode;
+            Feedback.left.hallA = (uint8_t)rtU_Left.b_hallA;
+            Feedback.left.hallB = (uint8_t)rtU_Left.b_hallB;
+            Feedback.left.hallC = (uint8_t)rtU_Left.b_hallC;
+            Feedback.left.dcPhaA = (int16_t)rtY_Left.DC_phaA;
+            Feedback.left.dcPhaB = (int16_t)rtY_Left.DC_phaB;
+            Feedback.left.dcPhaC = (int16_t)rtY_Left.DC_phaC;
+            Feedback.left.chops = (int16_t)rtU_Left.r_inpTgt;
+
+            Feedback.right.speed = (int16_t)rtY_Right.n_mot;
+            Feedback.right.dcLink = (int16_t)right_dc_curr;
+            Feedback.right.angle = (int16_t)rtU_Right.a_mechAngle;
+            Feedback.right.error = (int16_t)rtY_Right.z_errCode;
+            Feedback.right.hallA = (uint8_t)rtU_Right.b_hallA;
+            Feedback.right.hallB = (uint8_t)rtU_Right.b_hallB;
+            Feedback.right.hallC = (uint8_t)rtU_Right.b_hallC;
+            Feedback.right.dcPhaA = (int16_t)rtY_Right.DC_phaA;
+            Feedback.right.dcPhaB = (int16_t)rtY_Right.DC_phaB;
+            Feedback.right.dcPhaC = (int16_t)rtY_Right.DC_phaC;
+            Feedback.right.chops = (int16_t)rtU_Right.r_inpTgt;
+
+  	        Feedback.electricBrakeAmount = electricBrakeAmount;
+
+            Feedback.checksum  = calculateFeedbackChecksum(Feedback);      
+#endif          
+            uint8_t buf[5];
+            buf[0] = 0xAB;
+            buf[1] = 0xCD;
+            buf[2] = HOVER_CMD_PING;
+            buf[3] = 0x05;
+            buf[4] = 0x00;
+            uint8_t checksum = 0;
+            for (int i = 0; i < 4; i++) {
+              checksum ^= buf[i];
+            }
+            buf[4] = checksum;
+            HAL_UART_Transmit_DMA(&huart2, buf, sizeof(buf));
+//            HAL_UART_Transmit_DMA(&huart2, (uint8_t *)&Feedback, sizeof(Feedback));
+
         #endif
         #if defined(FEEDBACK_SERIAL_USART3)
           if(__HAL_DMA_GET_COUNTER(huart3.hdmatx) == 0) {
@@ -561,14 +644,30 @@ int main(void) {
             Feedback.boardTemp  = (int16_t)board_temp_deg_c;
             Feedback.cruiseCtrlAcv = (uint8_t)cruiseCtrlAcv;
             Feedback.standstillAcv = (uint8_t)standstillAcv;
+
             Feedback.left.speed = (int16_t)rtY_Left.n_mot;
-            Feedback.right.speed = (int16_t)rtY_Right.n_mot;
             Feedback.left.dcLink = (int16_t)left_dc_curr;
-            Feedback.right.dcLink = (int16_t)right_dc_curr;
             Feedback.left.angle = (int16_t)rtU_Left.a_mechAngle;
-            Feedback.right.angle = (int16_t)rtU_Right.a_mechAngle;
             Feedback.left.error = (int16_t)rtY_Left.z_errCode;
+            Feedback.left.hallA = (uint8_t)rtU_Left.b_hallA;
+            Feedback.left.hallB = (uint8_t)rtU_Left.b_hallB;
+            Feedback.left.hallC = (uint8_t)rtU_Left.b_hallC;
+            Feedback.left.dcPhaA = (int16_t)rtY_Left.DC_phaA;
+            Feedback.left.dcPhaB = (int16_t)rtY_Left.DC_phaB;
+            Feedback.left.dcPhaC = (int16_t)rtY_Left.DC_phaC;
+            Feedback.left.chops = (int16_t)rtU_Left.r_inpTgt;
+
+            Feedback.right.speed = (int16_t)rtY_Right.n_mot;
+            Feedback.right.dcLink = (int16_t)right_dc_curr;
+            Feedback.right.angle = (int16_t)rtU_Right.a_mechAngle;
             Feedback.right.error = (int16_t)rtY_Right.z_errCode;
+            Feedback.right.hallA = (uint8_t)rtU_Right.b_hallA;
+            Feedback.right.hallB = (uint8_t)rtU_Right.b_hallB;
+            Feedback.right.hallC = (uint8_t)rtU_Right.b_hallC;
+            Feedback.right.dcPhaA = (int16_t)rtY_Right.DC_phaA;
+            Feedback.right.dcPhaB = (int16_t)rtY_Right.DC_phaB;
+            Feedback.right.dcPhaC = (int16_t)rtY_Right.DC_phaC;
+            Feedback.right.chops = (int16_t)rtU_Right.r_inpTgt;
 
   	        Feedback.electricBrakeAmount = electricBrakeAmount;
 
@@ -640,6 +739,10 @@ int main(void) {
       #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
         printf("Powering off, wheels were inactive for too long\r\n");
       #endif
+      beepShort(4);
+      beepShort(6);                     // make 2 beeps indicating the motor enable
+      beepShort(4);
+      HAL_Delay(100);
       poweroff();
     }
 
