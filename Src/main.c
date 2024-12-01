@@ -89,23 +89,11 @@ extern uint8_t enable;                  // global variable for motor enable
 
 extern int16_t batVoltage;              // global variable for battery voltage
 
+extern volatile KiSCCommand  KiSC_Command;
+
 #if defined(CRUISE_CONTROL_SUPPORT) || (defined(STANDSTILL_HOLD_ENABLE) && (CTRL_TYP_SEL == FOC_CTRL) && (CTRL_MOD_REQ != SPD_MODE))
 extern uint8_t cruiseCtrlAcv;
 extern uint8_t standstillAcv;
-#endif
-
-#if defined(SIDEBOARD_SERIAL_USART2)
-extern SerialSideboard Sideboard_L;
-#endif
-#if defined(SIDEBOARD_SERIAL_USART3)
-extern SerialSideboard Sideboard_R;
-#endif
-#if (defined(CONTROL_PPM_LEFT) && defined(DEBUG_SERIAL_USART3)) || (defined(CONTROL_PPM_RIGHT) && defined(DEBUG_SERIAL_USART2))
-extern volatile uint16_t ppm_captured_value[PPM_NUM_CHANNELS+1];
-#endif
-#if (defined(CONTROL_PWM_LEFT) && defined(DEBUG_SERIAL_USART3)) || (defined(CONTROL_PWM_RIGHT) && defined(DEBUG_SERIAL_USART2))
-extern volatile uint16_t pwm_captured_ch1_value;
-extern volatile uint16_t pwm_captured_ch2_value;
 #endif
 
 
@@ -127,43 +115,9 @@ int16_t cmdR;                    // global variable for Right Command
 // Local variables
 //------------------------------------------------------------------------
 #if defined(FEEDBACK_SERIAL_USART2) || defined(FEEDBACK_SERIAL_USART3)
-#ifdef VARIANT_KiSC
-static SerialFeedback Feedback;
-#else
-typedef struct{
-  uint16_t  start;
-  int16_t   cmd1;
-  int16_t   cmd2;
-  int16_t   speedR_meas;
-  int16_t   speedL_meas;
-  int16_t   batVoltage;
-  int16_t   boardTemp;
-  uint16_t  cmdLed;
-  int16_t  current;
-  uint16_t  checksum;
-} SerialFeedback;
+
 static SerialFeedback Feedback;
 #endif
-#endif
-#if defined(FEEDBACK_SERIAL_USART2)
-static uint8_t sideboard_leds_L;
-#endif
-#if defined(FEEDBACK_SERIAL_USART3)
-static uint8_t sideboard_leds_R;
-#endif
-
-#ifdef VARIANT_TRANSPOTTER
-  uint8_t  nunchuk_connected;
-  extern float    setDistance;  
-
-  static uint8_t  checkRemote = 0;
-  static uint16_t distance;
-  static float    steering;
-  static int      distanceErr;  
-  static int      lastDistance = 0;
-  static uint16_t transpotter_counter = 0;
-#endif
-
 static int16_t    speed;                // local variable for speed. -1000 to 1000
 #ifndef VARIANT_TRANSPOTTER
   static int16_t  steer;                // local variable for steering. -1000 to 1000
@@ -228,6 +182,15 @@ int main(void) {
   
   int32_t board_temp_adcFixdt = adc_buffer.temp << 16;  // Fixed-point filter output initialized with current ADC converted to fixed-point
   int16_t board_temp_adcFilt  = adc_buffer.temp;
+
+  // Init command struct
+  KiSC_Command.brake = 0;
+  KiSC_Command.left.target = KiSC_Command.right.target = 0;
+  KiSC_Command.left.direction = KiSC_Command.right.direction = 0;
+  KiSC_Command.left.enable = KiSC_Command.right.enable = 0;
+  KiSC_Command.left.mode = KiSC_Command.right.mode = FOC_CTRL;
+  KiSC_Command.left.type = KiSC_Command.right.type = TRQ_MODE;
+  
 
   #ifdef MULTI_MODE_DRIVE
     if (adc_buffer.l_tx2 > input1[0].min + 50 && adc_buffer.l_rx2 > input2[0].min + 50) {
@@ -434,45 +397,9 @@ int main(void) {
       if ((distance / 1345.0) - setDistance > 0.5 && (lastDistance / 1345.0) - setDistance > 0.5) { // Error, robot too far away!
         enable = 0;
         beepLong(5);
-        #ifdef SUPPORT_LCD
-          LCD_ClearDisplay(&lcd);
-          HAL_Delay(5);
-          LCD_SetLocation(&lcd, 0, 0); LCD_WriteString(&lcd, "Emergency Off!");
-          LCD_SetLocation(&lcd, 0, 1); LCD_WriteString(&lcd, "Keeper too fast.");
-        #endif
         poweroff();
       }
 
-      #ifdef SUPPORT_NUNCHUK
-        if (transpotter_counter % 500 == 0) {
-          if (nunchuk_connected == 0 && enable == 0) {
-              if(Nunchuk_Read() == NUNCHUK_CONNECTED) {
-                #ifdef SUPPORT_LCD
-                  LCD_SetLocation(&lcd, 0, 0); LCD_WriteString(&lcd, "Nunchuk Control");
-                #endif
-                nunchuk_connected = 1;
-	      }
-	    } else {
-              nunchuk_connected = 0;
-	    }
-          }
-        }   
-      #endif
-
-      #ifdef SUPPORT_LCD
-        if (transpotter_counter % 100 == 0) {
-          if (LCDerrorFlag == 1 && enable == 0) {
-
-          } else {
-            if (nunchuk_connected == 0) {
-              LCD_SetLocation(&lcd,  4, 0); LCD_WriteFloat(&lcd,distance/1345.0,2);
-              LCD_SetLocation(&lcd, 10, 0); LCD_WriteFloat(&lcd,setDistance,2);
-            }
-            LCD_SetLocation(&lcd,  4, 1); LCD_WriteFloat(&lcd,batVoltage, 1);
-            // LCD_SetLocation(&lcd, 11, 1); LCD_WriteFloat(&lcd,MAX(ABS(currentR), ABS(currentL)),2);
-          }
-        }
-      #endif
       transpotter_counter++;
     #endif
 
@@ -493,33 +420,24 @@ int main(void) {
         rtU_Left.b_motEna = 1;
       }
       #ifdef STANDSTILL_HOLD_ENABLE
-        standstillHold();                                           // Apply Standstill Hold functionality. Only available and makes sense for VOLTAGE or TORQUE Mode
+//        standstillHold();                                           // Apply Standstill Hold functionality. Only available and makes sense for VOLTAGE or TORQUE Mode
       #endif
 //        input2[inIdx].cmd = 60;
 //        input1[inIdx].cmd = 60;
-        cmdL = input2[inIdx].cmd;
-        cmdR = input1[inIdx].cmd;
+        
+        // Calculate specials, Parkingbrake, Cruise Control, Standstill Hold, Brake
+
+        cmdL = KiSC_Command.left.target;
+        cmdR = KiSC_Command.right.target;
+        input1[inIdx].cmd = cmdL;
+        input2[inIdx].cmd = cmdR;
+
         pwmr = cmdR;
         pwml = cmdL;
 //      pwmr = CLAMP(input1[inIdx].cmd, 0, 4095) << 4;
 //      pwml = CLAMP(input2[inIdx].cmd, 0, 4095) << 4;
     #endif
 
-
-    // ####### SIDEBOARDS HANDLING #######
-    #if defined(SIDEBOARD_SERIAL_USART2)
-      sideboardSensors((uint8_t)Sideboard_L.sensors);
-    #endif
-    #if defined(FEEDBACK_SERIAL_USART2)
-      sideboardLeds(&sideboard_leds_L);
-    #endif
-    #if defined(SIDEBOARD_SERIAL_USART3)
-      sideboardSensors((uint8_t)Sideboard_R.sensors);
-    #endif
-    #if defined(FEEDBACK_SERIAL_USART3)
-      sideboardLeds(&sideboard_leds_R);
-    #endif
-    
 
     // ####### CALC BOARD TEMPERATURE #######
     filtLowPass32(adc_buffer.temp, TEMP_FILT_COEF, &board_temp_adcFixdt);
@@ -534,151 +452,90 @@ int main(void) {
     right_dc_curr = -(rtU_Right.i_DCLink * 100) / A2BIT_CONV;  // Right DC Link Current * 100
     dc_curr       = left_dc_curr + right_dc_curr;            // Total DC Link Current * 100
 
-    // ####### DEBUG SERIAL OUT #######
-    #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-      if (main_loop_counter % 25 == 0) {    // Send data periodically every 125 ms      
-        #if defined(DEBUG_SERIAL_PROTOCOL)
-          process_debug();
-        #else
-          printf("in1:%i in2:%i cmdL:%i cmdR:%i BatADC:%i BatV:%i TempADC:%i Temp:%i \r\n",
-            input1[inIdx].raw,        // 1: INPUT1
-            input2[inIdx].raw,        // 2: INPUT2
-            cmdL,                     // 3: output command: [-1000, 1000]
-            cmdR,                     // 4: output command: [-1000, 1000]
-            adc_buffer.batt1,         // 5: for battery voltage calibration
-            batVoltageCalib,          // 6: for verifying battery voltage calibration
-            board_temp_adcFilt,       // 7: for board temperature calibration
-            board_temp_deg_c);        // 8: for verifying board temperature calibration
-        #endif
-      }
-    #endif
-
     // ####### FEEDBACK SERIAL OUT #######
     #if defined(FEEDBACK_SERIAL_USART2) || defined(FEEDBACK_SERIAL_USART3)
       if (main_loop_counter % 2 == 0) {    // Send data periodically every 10 ms
-#ifdef VARIANT_KiSC
-#else
-        Feedback.start	        = (uint16_t)SERIAL_START_FRAME;
-        Feedback.cmd1           = (int16_t)input1[inIdx].cmd;
-        Feedback.cmd2           = (int16_t)input2[inIdx].cmd;
-        Feedback.speedR_meas	  = (int16_t)rtY_Right.n_mot;
-        Feedback.speedL_meas	  = (int16_t)rtY_Left.n_mot;
-        Feedback.batVoltage	    = (int16_t)batVoltageCalib;
-        Feedback.boardTemp	    = (int16_t)board_temp_deg_c;
-#endif
         #if defined(FEEDBACK_SERIAL_USART2)
-#ifndef VARIANT_KiSC
-            Feedback.cmdLed = (cruiseCtrlAcv << 0) | (standstillAcv << 0);
-          if(__HAL_DMA_GET_COUNTER(huart2.hdmatx) == 0) {
-            Feedback.cmdLed     = (uint16_t)sideboard_leds_L;
-            Feedback.checksum   = (uint16_t)(Feedback.start ^ Feedback.cmd1 ^ Feedback.cmd2 ^ Feedback.speedR_meas ^ Feedback.speedL_meas 
-                                           ^ Feedback.batVoltage ^ Feedback.boardTemp ^ Feedback.cmdLed);
+            if (main_loop_counter % 10 == 0) {    // Abwechselnd Motor Status, Status
+                uint8_t buf[HOVER_CMD_STATUS];
+                buf[0] = (HOVER_VALID_HEADER && 0xFF00) >> 8;
+                buf[1] = HOVER_VALID_HEADER & 0xFF;
+                buf[2] = HOVER_CMD_STATUS;
+                buf[3] = sizeof(buf);
+                buf[4] = (int16_t)(batVoltageCalib & 0xFF00) >> 8;
+                buf[5] = (int16_t)batVoltageCalib & 0xFF;
+                buf[6] = (int16_t)(board_temp_deg_c & 0xFF00) >> 8;
+                buf[7] = (int16_t)board_temp_deg_c & 0xFF;
+                buf[8] = (int16_t)(dc_curr & 0xFF00) >> 8;
+                buf[9] = (int16_t)dc_curr & 0xFF;
+                buf[10] = 0x00;   // Flags
+//             Feedback.cmdLed = (cruiseCtrlAcv << 0) | (standstillAcv << 0);
+                if (cruiseCtrlAcv) {
+                  buf[10] |= 0x01;
+                }
+                if (standstillAcv) {
+                  buf[10] |= 0x02;
+                }
+                if(HAL_GPIO_ReadPin(CHARGER_PORT, CHARGER_PIN))
+                {
+                  buf[10] |= 0x04;
+                }
+                if (rtY_Left.z_errCode) {
+                  buf[10] |= 0x08;
+                }
+                if (rtY_Right.z_errCode) {
+                  buf[10] |= 0x10;
+                }
 
-            HAL_UART_Transmit_DMA(&huart2, (uint8_t *)&Feedback, sizeof(Feedback));
-          }
-#else
-            Feedback.start = VALID_HEADER;
-            Feedback.batVoltage = (int16_t)batVoltageCalib;
-            Feedback.boardTemp  = (int16_t)board_temp_deg_c;
-            Feedback.cruiseCtrlAcv = (uint8_t)cruiseCtrlAcv;
-            Feedback.standstillAcv = (uint8_t)standstillAcv;
+                
+                uint8_t checksum = 0;
+                for (int i = 0; i < sizeof(buf)-1; i++) {
+                  checksum ^= buf[i];
+                }
+                buf[sizeof(buf)-1] = checksum;
+                HAL_UART_Transmit_DMA(&huart2, buf, sizeof(buf));
 
-            Feedback.left.speed = (int16_t)rtY_Left.n_mot;
-            Feedback.left.dcLink = (int16_t)left_dc_curr;
-            Feedback.left.angle = (int16_t)rtU_Left.a_mechAngle;
-            Feedback.left.error = (int16_t)rtY_Left.z_errCode;
-            Feedback.left.hallA = (uint8_t)rtU_Left.b_hallA;
-            Feedback.left.hallB = (uint8_t)rtU_Left.b_hallB;
-            Feedback.left.hallC = (uint8_t)rtU_Left.b_hallC;
-            Feedback.left.dcPhaA = (int16_t)rtY_Left.DC_phaA;
-            Feedback.left.dcPhaB = (int16_t)rtY_Left.DC_phaB;
-            Feedback.left.dcPhaC = (int16_t)rtY_Left.DC_phaC;
-            Feedback.left.chops = (int16_t)rtU_Left.r_inpTgt;
+            } else {
+                uint8_t buf[HOVER_CMD_MOTORSTAT_SIZE];
+                buf[0] = (HOVER_VALID_HEADER && 0xFF00) >> 8;
+                buf[1] = HOVER_VALID_HEADER & 0xFF;
+                buf[2] = HOVER_CMD_MOTORSTAT;
+                buf[3] = sizeof(buf);
 
-            Feedback.right.speed = (int16_t)rtY_Right.n_mot;
-            Feedback.right.dcLink = (int16_t)right_dc_curr;
-            Feedback.right.angle = (int16_t)rtU_Right.a_mechAngle;
-            Feedback.right.error = (int16_t)rtY_Right.z_errCode;
-            Feedback.right.hallA = (uint8_t)rtU_Right.b_hallA;
-            Feedback.right.hallB = (uint8_t)rtU_Right.b_hallB;
-            Feedback.right.hallC = (uint8_t)rtU_Right.b_hallC;
-            Feedback.right.dcPhaA = (int16_t)rtY_Right.DC_phaA;
-            Feedback.right.dcPhaB = (int16_t)rtY_Right.DC_phaB;
-            Feedback.right.dcPhaC = (int16_t)rtY_Right.DC_phaC;
-            Feedback.right.chops = (int16_t)rtU_Right.r_inpTgt;
+                buf[4] = (int16_t)(rtY_Left.n_mot & 0xFF00) >> 8;
+                buf[5] = (int16_t)rtY_Left.n_mot & 0xFF;
+                buf[6] = (int16_t)(rtY_Right.n_mot & 0xFF00) >> 8;
+                buf[7] = (int16_t)rtY_Right.n_mot & 0xFF;
+                buf[8] = (int16_t)(rtU_Left.r_inpTgt & 0xFF00) >> 8;
+                buf[9] = (int16_t)rtU_Left.r_inpTgt & 0xFF;
+                buf[10] = (int16_t)(rtU_Right.r_inpTgt & 0xFF00) >> 8;
+                buf[11] = (int16_t)rtU_Right.r_inpTgt & 0xFF;
+                buf[12] = 0x00;
+                if (rtY_Left.z_errCode) {
+                  buf[12] |= 0x02;
+                }
+                if (rtU_Left.b_motEna) {
+                  buf[12] |= 0x01;
+                }
+                buf[13] = 0x00;
+                if (rtY_Right.z_errCode) {
+                  buf[13] |= 0x02;
+                }
+                if (rtU_Right.b_motEna) {
+                  buf[13] |= 0x01;
+                }
 
-  	        Feedback.electricBrakeAmount = electricBrakeAmount;
+                
 
-            Feedback.checksum  = calculateFeedbackChecksum(Feedback);      
-#endif          
-            uint8_t buf[5];
-            buf[0] = 0xAB;
-            buf[1] = 0xCD;
-            buf[2] = HOVER_CMD_PING;
-            buf[3] = 0x05;
-            buf[4] = 0x00;
-            uint8_t checksum = 0;
-            for (int i = 0; i < 4; i++) {
-              checksum ^= buf[i];
+
+                uint8_t checksum = 0;
+                for (int i = 0; i < sizeof(buf)-1; i++) {
+                  checksum ^= buf[i];
+                }
+                buf[sizeof(buf)-1] = checksum;
+                HAL_UART_Transmit_DMA(&huart2, buf, sizeof(buf));
+
             }
-            buf[4] = checksum;
-            HAL_UART_Transmit_DMA(&huart2, buf, sizeof(buf));
-//            HAL_UART_Transmit_DMA(&huart2, (uint8_t *)&Feedback, sizeof(Feedback));
-
-        #endif
-        #if defined(FEEDBACK_SERIAL_USART3)
-          if(__HAL_DMA_GET_COUNTER(huart3.hdmatx) == 0) {
-#ifdef ESP32_USART_CONTROL
-            // cruiseCtrlAcv0
-            // standstillAcv
-#ifndef VARIANT_KiSC
-            Feedback.cmdLed = (cruiseCtrlAcv << 0) | (standstillAcv << 0);
-            Feedback.current    = (int16_t)dc_curr;
-#endif            
-#else
-            Feedback.cmdLed     = (uint16_t)sideboard_leds_R;
-#endif
-#ifdef VARIANT_KiSC      
-            Feedback.start = VALID_HEADER;
-            Feedback.batVoltage = (int16_t)batVoltageCalib;
-            Feedback.boardTemp  = (int16_t)board_temp_deg_c;
-            Feedback.cruiseCtrlAcv = (uint8_t)cruiseCtrlAcv;
-            Feedback.standstillAcv = (uint8_t)standstillAcv;
-
-            Feedback.left.speed = (int16_t)rtY_Left.n_mot;
-            Feedback.left.dcLink = (int16_t)left_dc_curr;
-            Feedback.left.angle = (int16_t)rtU_Left.a_mechAngle;
-            Feedback.left.error = (int16_t)rtY_Left.z_errCode;
-            Feedback.left.hallA = (uint8_t)rtU_Left.b_hallA;
-            Feedback.left.hallB = (uint8_t)rtU_Left.b_hallB;
-            Feedback.left.hallC = (uint8_t)rtU_Left.b_hallC;
-            Feedback.left.dcPhaA = (int16_t)rtY_Left.DC_phaA;
-            Feedback.left.dcPhaB = (int16_t)rtY_Left.DC_phaB;
-            Feedback.left.dcPhaC = (int16_t)rtY_Left.DC_phaC;
-            Feedback.left.chops = (int16_t)rtU_Left.r_inpTgt;
-
-            Feedback.right.speed = (int16_t)rtY_Right.n_mot;
-            Feedback.right.dcLink = (int16_t)right_dc_curr;
-            Feedback.right.angle = (int16_t)rtU_Right.a_mechAngle;
-            Feedback.right.error = (int16_t)rtY_Right.z_errCode;
-            Feedback.right.hallA = (uint8_t)rtU_Right.b_hallA;
-            Feedback.right.hallB = (uint8_t)rtU_Right.b_hallB;
-            Feedback.right.hallC = (uint8_t)rtU_Right.b_hallC;
-            Feedback.right.dcPhaA = (int16_t)rtY_Right.DC_phaA;
-            Feedback.right.dcPhaB = (int16_t)rtY_Right.DC_phaB;
-            Feedback.right.dcPhaC = (int16_t)rtY_Right.DC_phaC;
-            Feedback.right.chops = (int16_t)rtU_Right.r_inpTgt;
-
-  	        Feedback.electricBrakeAmount = electricBrakeAmount;
-
-            Feedback.checksum  = calculateFeedbackChecksum(Feedback);      
-#else            
-            Feedback.checksum   = (uint16_t)(Feedback.start ^ Feedback.cmd1 ^ Feedback.cmd2 ^ Feedback.speedR_meas ^ Feedback.speedL_meas 
-                                           ^ Feedback.batVoltage ^ Feedback.boardTemp ^ Feedback.cmdLed ^ Feedback.current);
-#endif                                           
-
-            HAL_UART_Transmit_DMA(&huart3, (uint8_t *)&Feedback, sizeof(Feedback));
-          }
         #endif
       }
     #endif

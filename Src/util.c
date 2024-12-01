@@ -36,19 +36,12 @@
 #include "new-protocol.h"
 #endif
 
-#if defined(DEBUG_I2C_LCD) || defined(SUPPORT_LCD)
-#include "hd44780.h"
-#endif
-
 /* =========================== Variable Definitions =========================== */
 
 //------------------------------------------------------------------------
 // Global variables set externally
 //------------------------------------------------------------------------
-extern volatile adc_buf_t adc_buffer;
-extern I2C_HandleTypeDef hi2c2;
 extern UART_HandleTypeDef huart2;
-extern UART_HandleTypeDef huart3;
 
 extern int16_t batVoltage;
 extern uint8_t backwardDrive;
@@ -58,20 +51,9 @@ extern uint8_t buzzerPattern;           // global variable for the buzzer patter
 
 extern uint8_t enable;                  // global variable for motor enable
 
-extern uint8_t nunchuk_data[6];
 extern volatile uint32_t timeoutCntGen; // global counter for general timeout counter
 extern volatile uint8_t  timeoutFlgGen; // global flag for general timeout counter
 extern volatile uint32_t main_loop_counter;
-
-#if defined(CONTROL_PPM_LEFT) || defined(CONTROL_PPM_RIGHT)
-extern volatile uint16_t ppm_captured_value[PPM_NUM_CHANNELS+1];
-#endif
-
-#if defined(CONTROL_PWM_LEFT) || defined(CONTROL_PWM_RIGHT)
-extern volatile uint16_t pwm_captured_ch1_value;
-extern volatile uint16_t pwm_captured_ch2_value;
-#endif
-
 
 //------------------------------------------------------------------------
 // Global variables set here in util.c
@@ -96,6 +78,7 @@ ExtY     rtY_Right;                     /* External outputs */
 
 uint8_t  inIdx      = 0;
 uint8_t  inIdx_prev = 0;
+
 #if defined(PRI_INPUT1) && defined(PRI_INPUT2) && defined(AUX_INPUT1) && defined(AUX_INPUT2)
 InputStruct input1[INPUTS_NR] = { {0, 0, 0, PRI_INPUT1}, {0, 0, 0, AUX_INPUT1} };
 InputStruct input2[INPUTS_NR] = { {0, 0, 0, PRI_INPUT2}, {0, 0, 0, AUX_INPUT2} };
@@ -112,21 +95,8 @@ uint8_t  timeoutFlgSerial = 0;          // Timeout Flag for Rx Serial command: 0
 uint8_t  ctrlModReqRaw = CTRL_MOD_REQ;
 uint8_t  ctrlModReq    = CTRL_MOD_REQ;  // Final control mode request 
 
-#if defined(DEBUG_I2C_LCD) || defined(SUPPORT_LCD)
-LCD_PCF8574_HandleTypeDef lcd;
-#endif
-
-#ifdef VARIANT_TRANSPOTTER
-float    setDistance;
-uint16_t VirtAddVarTab[NB_OF_VAR] = {1337};       // Virtual address defined by the user: 0xFFFF value is prohibited
-static   uint16_t saveValue       = 0;
-static   uint8_t  saveValue_valid = 0;
-#elif !defined(VARIANT_HOVERBOARD) && !defined(VARIANT_TRANSPOTTER)
 uint16_t VirtAddVarTab[NB_OF_VAR] = {1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009,
                                      1010, 1011, 1012, 1013, 1014, 1015, 1016, 1017, 1018};
-#else
-uint16_t VirtAddVarTab[NB_OF_VAR] = {1000};       // Dummy virtual address to avoid warnings
-#endif
 
 
 //------------------------------------------------------------------------
@@ -141,9 +111,6 @@ static int16_t INPUT_MIN;             // [-] Input target minimum limitation
   static uint8_t  inp_cal_valid  = 0;
 #endif
 
-#if defined(CONTROL_ADC)
-static uint16_t timeoutCntADC = ADC_PROTECT_TIMEOUT;  // Timeout counter for ADC Protection
-#endif
 
 #if defined(DEBUG_SERIAL_USART2) || defined(CONTROL_SERIAL_USART2) || defined(SIDEBOARD_SERIAL_USART2)
 static uint8_t  rx_buffer_L[SERIAL_BUFFER_SIZE];      // USART Rx DMA circular buffer
@@ -153,49 +120,17 @@ static uint32_t rx_buffer_L_len = ARRAY_LEN(rx_buffer_L);
 static uint16_t timeoutCntSerial_L = SERIAL_TIMEOUT;  // Timeout counter for Rx Serial command
 static uint8_t  timeoutFlgSerial_L = 0;               // Timeout Flag for Rx Serial command: 0 = OK, 1 = Problem detected (line disconnected or wrong Rx data)
 #endif
-#if defined(SIDEBOARD_SERIAL_USART2)
-SerialSideboard Sideboard_L;
-SerialSideboard Sideboard_L_raw;
-static uint32_t Sideboard_L_len = sizeof(Sideboard_L);
-#endif
-
-#if defined(DEBUG_SERIAL_USART3) || defined(CONTROL_SERIAL_USART3) || defined(SIDEBOARD_SERIAL_USART3)
-static uint8_t  rx_buffer_R[SERIAL_BUFFER_SIZE];      // USART Rx DMA circular buffer
-static uint32_t rx_buffer_R_len = ARRAY_LEN(rx_buffer_R);
-#endif
-#if defined(CONTROL_SERIAL_USART3) || defined(SIDEBOARD_SERIAL_USART3)
-static uint16_t timeoutCntSerial_R = SERIAL_TIMEOUT;  // Timeout counter for Rx Serial command
-static uint8_t  timeoutFlgSerial_R = 0;               // Timeout Flag for Rx Serial command: 0 = OK, 1 = Problem detected (line disconnected or wrong Rx data)
-#endif
-#if defined(SIDEBOARD_SERIAL_USART3)
-SerialSideboard Sideboard_R;
-SerialSideboard Sideboard_R_raw;
-static uint32_t Sideboard_R_len = sizeof(Sideboard_R);
-#endif
 
 #if defined(CONTROL_SERIAL_USART2)
-static SerialCommand commandL;
-static SerialCommand commandL_raw;
+volatile  KiSCCommand    KiSC_Command;
+volatile  KiSCSettings   KiSC_Settings = {5, 200, 127, 1}; // Default settings// Max 4 AMP, MAX 200 rpm, eBrake auf 127
+
+static SerialCommand  commandL;
+static SerialCommand  commandL_raw;
 static uint32_t commandL_len = sizeof(commandL);
   #ifdef CONTROL_IBUS
   static uint16_t ibusL_captured_value[IBUS_NUM_CHANNELS];
   #endif
-#endif
-
-#if defined(CONTROL_SERIAL_USART3)
-#ifdef VARIANT_KiSC
-static SerialCommand commandR;
-static SerialCommand commandR_raw;
-#endif
-static uint32_t commandR_len = sizeof(commandR);
-  #ifdef CONTROL_IBUS
-  static uint16_t ibusR_captured_value[IBUS_NUM_CHANNELS];
-  #endif
-#endif
-
-#if defined(SUPPORT_BUTTONS) || defined(SUPPORT_BUTTONS_LEFT) || defined(SUPPORT_BUTTONS_RIGHT)
-static uint8_t button1;                 // Blue
-static uint8_t button2;                 // Green
 #endif
 
 #ifdef VARIANT_HOVERCAR
@@ -207,33 +142,6 @@ uint8_t cruiseCtrlAcv = 0;
 uint8_t standstillAcv = 0;
 #endif
 
-/* =========================== Retargeting printf =========================== */
-/* retarget the C library printf function to the USART */
-#if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-  #ifdef __GNUC__
-    #define PUTCHAR_PROTOTYPE int __io_putchar(int ch)
-  #else
-    #define PUTCHAR_PROTOTYPE int fputc(int ch, FILE *f)
-  #endif
-  PUTCHAR_PROTOTYPE {
-    #if defined(DEBUG_SERIAL_USART2)
-      HAL_UART_Transmit(&huart2, (uint8_t *)&ch, 1, 1000);
-    #elif defined(DEBUG_SERIAL_USART3)
-      HAL_UART_Transmit(&huart3, (uint8_t *)&ch, 1, 1000);
-    #endif
-    return ch;
-  }
-  
-  #ifdef __GNUC__
-    int _write(int file, char *data, int len) {
-      int i;
-      for (i = 0; i < len; i++) { __io_putchar( *data++ );}
-      return len;
-    }
-  #endif
-#endif
-
- 
 /* =========================== Initialization Functions =========================== */
 
 void BLDC_Init(void) {
@@ -281,28 +189,9 @@ void Input_Lim_Init(void) {     // Input Limitations - ! Do NOT touch !
 }
 
 void Input_Init(void) {
-  #if defined(CONTROL_PPM_LEFT) || defined(CONTROL_PPM_RIGHT)
-    PPM_Init();
-  #endif
-
- #if defined(CONTROL_PWM_LEFT) || defined(CONTROL_PWM_RIGHT)
-    PWM_Init();
-  #endif
-
-  #if defined(DEBUG_SERIAL_USART2) || defined(CONTROL_SERIAL_USART2) || defined(FEEDBACK_SERIAL_USART2) || defined(SIDEBOARD_SERIAL_USART2)
-    UART2_Init();
-  #endif
-  #if defined(DEBUG_SERIAL_USART3) || defined(CONTROL_SERIAL_USART3) || defined(FEEDBACK_SERIAL_USART3) || defined(SIDEBOARD_SERIAL_USART3)
-    UART3_Init();
-  #endif
-  #if defined(DEBUG_SERIAL_USART2) || defined(CONTROL_SERIAL_USART2) || defined(SIDEBOARD_SERIAL_USART2)
-    HAL_UART_Receive_DMA(&huart2, (uint8_t *)rx_buffer_L, sizeof(rx_buffer_L));
-    UART_DisableRxErrors(&huart2);
-  #endif
-  #if defined(DEBUG_SERIAL_USART3) || defined(CONTROL_SERIAL_USART3) || defined(SIDEBOARD_SERIAL_USART3)
-    HAL_UART_Receive_DMA(&huart3, (uint8_t *)rx_buffer_R, sizeof(rx_buffer_R));
-    UART_DisableRxErrors(&huart3);
-  #endif
+  UART2_Init();
+  HAL_UART_Receive_DMA(&huart2, (uint8_t *)rx_buffer_L, sizeof(rx_buffer_L));
+  UART_DisableRxErrors(&huart2);
 
   #if !defined(VARIANT_HOVERBOARD) && !defined(VARIANT_TRANSPOTTER)
     uint16_t writeCheck, readVal;
@@ -310,9 +199,6 @@ void Input_Init(void) {
     EE_Init();            /* EEPROM Init */
     EE_ReadVariable(VirtAddVarTab[0], &writeCheck);
     if (writeCheck == FLASH_WRITE_KEY) {
-      #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-        printf("Using the configuration from EEprom\r\n");
-      #endif
 
       EE_ReadVariable(VirtAddVarTab[1] , &readVal); rtP_Left.i_max = rtP_Right.i_max = (int16_t)readVal;
       EE_ReadVariable(VirtAddVarTab[2] , &readVal); rtP_Left.n_max = rtP_Right.n_max = (int16_t)readVal;
@@ -331,9 +217,6 @@ void Input_Init(void) {
           input2[i].typ, input2[i].min, input2[i].mid, input2[i].max);
       }
     } else {
-      #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-        printf("Using the configuration from config.h\r\n");
-      #endif
 
       for (uint8_t i=0; i<INPUTS_NR; i++) {
         if (input1[i].typDef == 3) {  // If Input type defined is 3 (auto), identify the input type based on the values from config.h
@@ -352,56 +235,6 @@ void Input_Init(void) {
       }
     }
     HAL_FLASH_Lock();
-  #endif
-
-  #ifdef VARIANT_TRANSPOTTER
-    enable = 1;
-
-    HAL_FLASH_Unlock();
-    EE_Init();            /* EEPROM Init */
-    EE_ReadVariable(VirtAddVarTab[0], &saveValue);
-    HAL_FLASH_Lock();
-
-    setDistance = saveValue / 1000.0;
-    if (setDistance < 0.2) {
-      setDistance = 1.0;
-    }
-  #endif
-
-  #if defined(DEBUG_I2C_LCD) || defined(SUPPORT_LCD)
-    I2C_Init();
-    HAL_Delay(50);
-    lcd.pcf8574.PCF_I2C_ADDRESS = 0x27;
-    lcd.pcf8574.PCF_I2C_TIMEOUT = 5;
-    lcd.pcf8574.i2c             = hi2c2;
-    lcd.NUMBER_OF_LINES         = NUMBER_OF_LINES_2;
-    lcd.type                    = TYPE0;
-
-    if(LCD_Init(&lcd)!=LCD_OK) {
-        // error occured
-        //TODO while(1);
-    }
-
-    LCD_ClearDisplay(&lcd);
-    HAL_Delay(5);
-    LCD_SetLocation(&lcd, 0, 0);
-    #ifdef VARIANT_TRANSPOTTER
-      LCD_WriteString(&lcd, "TranspOtter V2.1");
-    #else
-      LCD_WriteString(&lcd, "Hover V2.0");
-    #endif
-    LCD_SetLocation(&lcd,  0, 1); LCD_WriteString(&lcd, "Initializing...");
-  #endif
-
-  #if defined(VARIANT_TRANSPOTTER) && defined(SUPPORT_LCD)
-    LCD_ClearDisplay(&lcd);
-    HAL_Delay(5);
-    LCD_SetLocation(&lcd,  0, 1); LCD_WriteString(&lcd, "Bat:");
-    LCD_SetLocation(&lcd,  8, 1); LCD_WriteString(&lcd, "V");
-    LCD_SetLocation(&lcd, 15, 1); LCD_WriteString(&lcd, "A");
-    LCD_SetLocation(&lcd,  0, 0); LCD_WriteString(&lcd, "Len:");
-    LCD_SetLocation(&lcd,  8, 0); LCD_WriteString(&lcd, "m(");
-    LCD_SetLocation(&lcd, 14, 0); LCD_WriteString(&lcd, "m)");
   #endif
 }
 
@@ -505,109 +338,6 @@ void calcAvgSpeed(void) {
  * The Values will be saved to flash. Values are persistent if you flash with platformio. To erase them, make a full chip erase.
  */
 void adcCalibLim(void) {
-#ifdef AUTO_CALIBRATION_ENA
-  calcAvgSpeed();
-  if (speedAvgAbs > 5) {    // do not enter this mode if motors are spinning
-    return;
-  }
-
-#if !defined(VARIANT_HOVERBOARD) && !defined(VARIANT_TRANSPOTTER)
-
-  #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-  printf("Input calibration started...\r\n");
-  #endif
-
-  readInputRaw();
-  // Inititalization: MIN = a high value, MAX = a low value
-  int32_t  input1_fixdt = input1[inIdx].raw << 16;
-  int32_t  input2_fixdt = input2[inIdx].raw << 16;
-  int16_t  INPUT1_MIN_temp = MAX_int16_T;
-  int16_t  INPUT1_MID_temp = 0;
-  int16_t  INPUT1_MAX_temp = MIN_int16_T;
-  int16_t  INPUT2_MIN_temp = MAX_int16_T;
-  int16_t  INPUT2_MID_temp = 0;
-  int16_t  INPUT2_MAX_temp = MIN_int16_T;
-  int16_t  input_margin    = 0;
-  uint16_t input_cal_timeout = 0;
-  
-  #ifdef CONTROL_ADC
-  if (inIdx == CONTROL_ADC) {
-    input_margin = ADC_MARGIN;
-  }
-  #endif
-
-  // Extract MIN, MAX and MID from ADC while the power button is not pressed
-  while (!HAL_GPIO_ReadPin(BUTTON_PORT, BUTTON_PIN) && input_cal_timeout++ < 4000) {   // 20 sec timeout
-    readInputRaw();
-    filtLowPass32(input1[inIdx].raw, FILTER, &input1_fixdt);
-    filtLowPass32(input2[inIdx].raw, FILTER, &input2_fixdt);
-    
-    INPUT1_MID_temp = (int16_t)(input1_fixdt >> 16);// CLAMP(input1_fixdt >> 16, INPUT1_MIN, INPUT1_MAX);   // convert fixed-point to integer
-    INPUT2_MID_temp = (int16_t)(input2_fixdt >> 16);// CLAMP(input2_fixdt >> 16, INPUT2_MIN, INPUT2_MAX);
-    INPUT1_MIN_temp = MIN(INPUT1_MIN_temp, INPUT1_MID_temp);
-    INPUT1_MAX_temp = MAX(INPUT1_MAX_temp, INPUT1_MID_temp);
-    INPUT2_MIN_temp = MIN(INPUT2_MIN_temp, INPUT2_MID_temp);
-    INPUT2_MAX_temp = MAX(INPUT2_MAX_temp, INPUT2_MID_temp);
-    HAL_Delay(5);
-  }
-
-  #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-  printf("Input1 is ");
-  #endif
-  uint8_t input1TypTemp = checkInputType(INPUT1_MIN_temp, INPUT1_MID_temp, INPUT1_MAX_temp);
-  if (input1TypTemp == input1[inIdx].typDef || input1[inIdx].typDef == 3) {  // Accept calibration only if the type is correct OR type was set to 3 (auto)
-    #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-    printf("..OK\r\n");
-    #endif
-  } else {
-    input1TypTemp = 0; // Disable input
-    #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-    printf("..NOK\r\n");
-    #endif
-  }
-
-  #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-  printf("Input2 is ");
-  #endif
-  uint8_t input2TypTemp = checkInputType(INPUT2_MIN_temp, INPUT2_MID_temp, INPUT2_MAX_temp);
-  if (input2TypTemp == input2[inIdx].typDef || input2[inIdx].typDef == 3) {  // Accept calibration only if the type is correct OR type was set to 3 (auto)
-    #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-    printf("..OK\r\n");
-    #endif
-  } else {
-    input2TypTemp = 0; // Disable input
-    #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-    printf("..NOK\r\n");
-    #endif
-  }
-
-
-  // At least one of the inputs is not ignored
-  if (input1TypTemp != 0 || input2TypTemp != 0){
-    input1[inIdx].typ = input1TypTemp;
-    input1[inIdx].min = INPUT1_MIN_temp + input_margin;
-    input1[inIdx].mid = INPUT1_MID_temp;
-    input1[inIdx].max = INPUT1_MAX_temp - input_margin;
-
-    input2[inIdx].typ = input2TypTemp;
-    input2[inIdx].min = INPUT2_MIN_temp + input_margin;
-    input2[inIdx].mid = INPUT2_MID_temp;
-    input2[inIdx].max = INPUT2_MAX_temp - input_margin;
-
-    inp_cal_valid = 1;    // Mark calibration to be saved in Flash at shutdown
-    #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-    printf("Limits Input1: TYP:%i MIN:%i MID:%i MAX:%i\r\nLimits Input2: TYP:%i MIN:%i MID:%i MAX:%i\r\n",
-            input1[inIdx].typ, input1[inIdx].min, input1[inIdx].mid, input1[inIdx].max,
-            input2[inIdx].typ, input2[inIdx].min, input2[inIdx].mid, input2[inIdx].max);
-    #endif
-  }else{
-    #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-    printf("Both inputs cannot be ignored, calibration rejected.\r\n");
-    #endif
-  }
-
-#endif
-#endif  // AUTO_CALIBRATION_ENA
 }
  /*
  * Update Maximum Motor Current Limit (via ADC1) and Maximum Speed Limit (via ADC2)
@@ -624,9 +354,6 @@ void updateCurSpdLim(void) {
 
 #if !defined(VARIANT_HOVERBOARD) && !defined(VARIANT_TRANSPOTTER)
 
-  #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-  printf("Torque and Speed limits update started...\r\n");
-  #endif
 
   int32_t  input1_fixdt = input1[inIdx].raw << 16;
   int32_t  input2_fixdt = input2[inIdx].raw << 16;
@@ -657,12 +384,6 @@ void updateCurSpdLim(void) {
     rtP_Left.n_max = rtP_Right.n_max  = (int16_t)((N_MOT_MAX * spd_factor) >> 12);                 // fixdt(0,16,16) to fixdt(1,16,4)
     cur_spd_valid  += 2;  // Mark update to be saved in Flash at shutdown
   }
-
-  #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-  // cur_spd_valid: 0 = No limit changed, 1 = Current limit changed, 2 = Speed limit changed, 3 = Both limits changed
-  printf("Limits (%i)\r\nCurrent: fixdt:%li factor%i i_max:%i \r\nSpeed: fixdt:%li factor:%i n_max:%i\r\n",
-          cur_spd_valid, input1_fixdt, cur_factor, rtP_Left.i_max, input2_fixdt, spd_factor, rtP_Left.n_max);
-  #endif
 
 #endif
 }
@@ -776,6 +497,7 @@ void cruiseControlEnable(uint8_t bEnable) {
         }
     }
 }
+
 #endif
 void cruiseControl(uint8_t button) {
   #ifdef CRUISE_CONTROL_SUPPORT
@@ -802,38 +524,17 @@ void cruiseControl(uint8_t button) {
 int checkInputType(int16_t min, int16_t mid, int16_t max){
 
   int type = 0;  
-  #ifdef CONTROL_ADC
-  int16_t threshold = 400;      // Threshold to define if values are too close
-  #else
+
   int16_t threshold = 200;
-  #endif
 
   if ((min / threshold) == (max / threshold) || (mid / threshold) == (max / threshold) || min > max || mid > max) {
     type = 0;
-    #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-    printf("ignored");                // (MIN and MAX) OR (MID and MAX) are close, disable input
-    #endif
   } else {
     if ((min / threshold) == (mid / threshold)){
       type = 1;
-      #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-      printf("a normal pot");        // MIN and MID are close, it's a normal pot
-      #endif
     } else {
       type = 2;
-      #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-      printf("a mid-resting pot");   // it's a mid resting pot
-      #endif
     }
-
-    #ifdef CONTROL_ADC
-    if ((min + ADC_MARGIN - ADC_PROTECT_THRESH) > 0 && (max - ADC_MARGIN + ADC_PROTECT_THRESH) < 4095) {
-      #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-      printf(" AND protected");
-      #endif
-      beepLong(2); // Indicate protection by a beep
-    }
-    #endif
   }
 
   return type;
@@ -871,41 +572,8 @@ void calcInputCmd(InputStruct *in, int16_t out_min, int16_t out_max) {
  * Function to read the Input Raw values from various input devices
  */
 void readInputRaw(void) {
-    #ifdef CONTROL_ADC
-    if (inIdx == CONTROL_ADC) {
-      #ifdef ADC_ALTERNATE_CONNECT
-        input1[inIdx].raw = adc_buffer.l_rx2;
-        input2[inIdx].raw = adc_buffer.l_tx2;
-      #else
-        input1[inIdx].raw = adc_buffer.l_tx2;
-        input2[inIdx].raw = adc_buffer.l_rx2;
-      #endif
-    }
-    #endif
-
-    #if defined(CONTROL_NUNCHUK) || defined(SUPPORT_NUNCHUK)
-    if (Nunchuk_Read() == NUNCHUK_CONNECTED) {
-      if (inIdx == CONTROL_NUNCHUK) {
-        input1[inIdx].raw = (nunchuk_data[0] - 127) * 8; // X axis 0-255
-        input2[inIdx].raw = (nunchuk_data[1] - 128) * 8; // Y axis 0-255
-      }
-      #ifdef SUPPORT_BUTTONS
-        button1 = (uint8_t)nunchuk_data[5] & 1;
-        button2 = (uint8_t)(nunchuk_data[5] >> 1) & 1;
-      #endif
-    }
-    #endif
-
     #if defined(CONTROL_SERIAL_USART2)
     if (inIdx == CONTROL_SERIAL_USART2) {
-      #ifdef CONTROL_IBUS
-        for (uint8_t i = 0; i < (IBUS_NUM_CHANNELS * 2); i+=2) {
-          ibusL_captured_value[(i/2)] = CLAMP(commandL.channels[i] + (commandL.channels[i+1] << 8) - 1000, 0, INPUT_MAX); // 1000-2000 -> 0-1000
-        }
-        input1[inIdx].raw = (ibusL_captured_value[0] - 500) * 2;
-        input2[inIdx].raw = (ibusL_captured_value[1] - 500) * 2; 
-      #else
-#ifdef VARIANT_KiSC
         input1[inIdx].cmd = commandL.left.pwm;
         input2[inIdx].cmd = commandL.right.pwm;
         if (commandL.cruiseCtrlAcv) {
@@ -913,94 +581,7 @@ void readInputRaw(void) {
         } else {
           cruiseControlEnable(0);
         }
-#else
-        input1[inIdx].raw = commandL.steer;
-        input2[inIdx].raw = commandL.speed;
-#endif        
-      #endif
     }
-    #endif
-    #if defined(CONTROL_SERIAL_USART3)
-    if (inIdx == CONTROL_SERIAL_USART3) {
-      #ifdef CONTROL_IBUS
-        for (uint8_t i = 0; i < (IBUS_NUM_CHANNELS * 2); i+=2) {
-          ibusR_captured_value[(i/2)] = CLAMP(commandR.channels[i] + (commandR.channels[i+1] << 8) - 1000, 0, INPUT_MAX); // 1000-2000 -> 0-1000
-        }
-        input1[inIdx].raw = (ibusR_captured_value[0] - 500) * 2;
-        input2[inIdx].raw = (ibusR_captured_value[1] - 500) * 2; 
-      #else
-#ifdef VARIANT_KiSC
-        input1[inIdx].cmd = commandR.left.pwm;
-        input2[inIdx].cmd = commandR.right.pwm;
-        if (commandR.cruiseCtrlAcv) {
-          cruiseControlEnable(1);
-        } else {
-          cruiseControlEnable(0);
-        }
-#else
-#ifdef ESP32_USART_CONTROL
-        if (commandR.uiControl && (1 << 0))
-          cruiseControlEnable(1);
-        else
-          cruiseControlEnable(0);
-#endif
-#endif
-      #endif
-    }
-    #endif
-
-    #if defined(SIDEBOARD_SERIAL_USART2)
-    if (inIdx == SIDEBOARD_SERIAL_USART2) {
-      input1[inIdx].raw = Sideboard_L.cmd1;
-      input2[inIdx].raw = Sideboard_L.cmd2;
-    }
-    #endif
-    #if defined(SIDEBOARD_SERIAL_USART3)
-    if (inIdx == SIDEBOARD_SERIAL_USART3) {
-      input1[inIdx].raw = Sideboard_R.cmd1;
-      input2[inIdx].raw = Sideboard_R.cmd2;
-    }
-    #endif
-
-    #if defined(CONTROL_PPM_LEFT)
-    if (inIdx == CONTROL_PPM_LEFT) {
-      input1[inIdx].raw = (ppm_captured_value[0] - 500) * 2;
-      input2[inIdx].raw = (ppm_captured_value[1] - 500) * 2;
-    }
-    #endif
-    #if defined(CONTROL_PPM_RIGHT)
-    if (inIdx == CONTROL_PPM_RIGHT) {
-      input1[inIdx].raw = (ppm_captured_value[0] - 500) * 2;
-      input2[inIdx].raw = (ppm_captured_value[1] - 500) * 2;
-    }
-    #endif
-    #if (defined(CONTROL_PPM_LEFT) || defined(CONTROL_PPM_RIGHT)) && defined(SUPPORT_BUTTONS)
-      button1 = ppm_captured_value[5] > 500;
-      button2 = 0;
-    #endif
-
-    #if defined(CONTROL_PWM_LEFT)
-    if (inIdx == CONTROL_PWM_LEFT) {
-      input1[inIdx].raw = (pwm_captured_ch1_value - 500) * 2;
-      input2[inIdx].raw = (pwm_captured_ch2_value - 500) * 2;
-    }
-    #endif
-    #if defined(CONTROL_PWM_RIGHT)
-    if (inIdx == CONTROL_PWM_RIGHT) {
-      input1[inIdx].raw = (pwm_captured_ch1_value - 500) * 2;
-      input2[inIdx].raw = (pwm_captured_ch2_value - 500) * 2;
-    }
-    #endif
-
-    #ifdef VARIANT_TRANSPOTTER
-      #ifdef GAMETRAK_CONNECTION_NORMAL
-        input1[inIdx].cmd = adc_buffer.l_rx2;
-        input2[inIdx].cmd = adc_buffer.l_tx2;
-      #endif
-      #ifdef GAMETRAK_CONNECTION_ALTERNATE
-        input1[inIdx].cmd = adc_buffer.l_tx2;
-        input2[inIdx].cmd = adc_buffer.l_rx2;
-      #endif
     #endif
 }
 
@@ -1008,95 +589,16 @@ void readInputRaw(void) {
  * Function to handle the ADC, UART and General timeout (Nunchuk, PPM, PWM)
  */
 void handleTimeout(void) {
-    #ifdef CONTROL_ADC
-    if (inIdx == CONTROL_ADC) {
-      // If input1 or Input2 is either below MIN - Threshold or above MAX + Threshold, ADC protection timeout
-      if (IN_RANGE(input1[inIdx].raw, input1[inIdx].min - ADC_PROTECT_THRESH, input1[inIdx].max + ADC_PROTECT_THRESH) &&
-          IN_RANGE(input2[inIdx].raw, input2[inIdx].min - ADC_PROTECT_THRESH, input2[inIdx].max + ADC_PROTECT_THRESH)) {
-          timeoutFlgADC = 0;                            // Reset the timeout flag
-          timeoutCntADC = 0;                            // Reset the timeout counter
-      } else {
-        if (timeoutCntADC++ >= ADC_PROTECT_TIMEOUT) {   // Timeout qualification
-          timeoutFlgADC = 1;                            // Timeout detected
-          timeoutCntADC = ADC_PROTECT_TIMEOUT;          // Limit timout counter value
-        }
-      }
-    }
-    #endif
-
     #if defined(CONTROL_SERIAL_USART2) || defined(SIDEBOARD_SERIAL_USART2)
       if (timeoutCntSerial_L++ >= SERIAL_TIMEOUT) {     // Timeout qualification
         timeoutFlgSerial_L = 1;                         // Timeout detected
         timeoutCntSerial_L = SERIAL_TIMEOUT;            // Limit timout counter value
-        #if defined(DUAL_INPUTS) && ((defined(CONTROL_SERIAL_USART2) && CONTROL_SERIAL_USART2 == 1) || (defined(SIDEBOARD_SERIAL_USART2) && SIDEBOARD_SERIAL_USART2 == 1))
-          inIdx = 0;                                    // Switch to Primary input in case of Timeout on Auxiliary input
-        #endif
       } else {                                          // No Timeout
-        #if defined(DUAL_INPUTS) && defined(SIDEBOARD_SERIAL_USART2)
-          if (Sideboard_L.sensors & SWA_SET) {          // If SWA is set, switch to Sideboard control
-            inIdx = SIDEBOARD_SERIAL_USART2;
-          } else {
-            inIdx = !SIDEBOARD_SERIAL_USART2;
-          }
-        #elif defined(DUAL_INPUTS) && (defined(CONTROL_SERIAL_USART2) && CONTROL_SERIAL_USART2 == 1)
-          inIdx = 1;                                    // Switch to Auxiliary input in case of NO Timeout on Auxiliary input
-        #endif
       }
       #if (defined(CONTROL_SERIAL_USART2) && CONTROL_SERIAL_USART2 == 0) || (defined(SIDEBOARD_SERIAL_USART2) && SIDEBOARD_SERIAL_USART2 == 0 && !defined(VARIANT_HOVERBOARD))
         timeoutFlgSerial = timeoutFlgSerial_L;          // Report Timeout only on the Primary Input
       #endif
 
-    #endif
-
-    #if defined(CONTROL_SERIAL_USART3) || defined(SIDEBOARD_SERIAL_USART3)
-      if (timeoutCntSerial_R++ >= SERIAL_TIMEOUT) {     // Timeout qualification
-        timeoutFlgSerial_R = 1;                         // Timeout detected
-        timeoutCntSerial_R = SERIAL_TIMEOUT;            // Limit timout counter value
-        #if defined(DUAL_INPUTS) && ((defined(CONTROL_SERIAL_USART3) && CONTROL_SERIAL_USART3 == 1) || (defined(SIDEBOARD_SERIAL_USART3) && SIDEBOARD_SERIAL_USART3 == 1))
-          inIdx = 0;                                    // Switch to Primary input in case of Timeout on Auxiliary input
-        #endif
-      } else {                                          // No Timeout
-        #if defined(DUAL_INPUTS) && defined(SIDEBOARD_SERIAL_USART3)
-          if (Sideboard_R.sensors & SWA_SET) {          // If SWA is set, switch to Sideboard control
-            inIdx = SIDEBOARD_SERIAL_USART3;
-          } else {
-            inIdx = !SIDEBOARD_SERIAL_USART3;
-          }
-        #elif defined(DUAL_INPUTS) && (defined(CONTROL_SERIAL_USART3) && CONTROL_SERIAL_USART3 == 1)
-          inIdx = 1;                                    // Switch to Auxiliary input in case of NO Timeout on Auxiliary input
-        #endif
-      }
-      #ifdef VARIANT_KiSC
-        timeoutFlgSerial = timeoutFlgSerial_R;          // Report Timeout only on the Primary Input
-      #endif
-      #if (defined(CONTROL_SERIAL_USART3) && CONTROL_SERIAL_USART3 == 0) || (defined(SIDEBOARD_SERIAL_USART3) && SIDEBOARD_SERIAL_USART3 == 0 && !defined(VARIANT_HOVERBOARD))
-        timeoutFlgSerial = timeoutFlgSerial_R;          // Report Timeout only on the Primary Input
-      #endif
-    #endif
-
-    #if defined(SIDEBOARD_SERIAL_USART2) && defined(SIDEBOARD_SERIAL_USART3)
-      timeoutFlgSerial = timeoutFlgSerial_L || timeoutFlgSerial_R;
-    #endif
-
-    #if defined(CONTROL_NUNCHUK) || defined(SUPPORT_NUNCHUK) || defined(VARIANT_TRANSPOTTER) || \
-        defined(CONTROL_PPM_LEFT) || defined(CONTROL_PPM_RIGHT) || defined(CONTROL_PWM_LEFT) || defined(CONTROL_PWM_RIGHT)
-      if (timeoutCntGen++ >= TIMEOUT) {                 // Timeout qualification
-        #if defined(CONTROL_NUNCHUK) || defined(SUPPORT_NUNCHUK) || defined(VARIANT_TRANSPOTTER) || \
-            (defined(CONTROL_PPM_LEFT) && CONTROL_PPM_LEFT == 0) || (defined(CONTROL_PPM_RIGHT) && CONTROL_PPM_RIGHT == 0) || \
-            (defined(CONTROL_PWM_LEFT) && CONTROL_PWM_LEFT == 0) || (defined(CONTROL_PWM_RIGHT) && CONTROL_PWM_RIGHT == 0)
-          timeoutFlgGen = 1;                            // Report Timeout only on the Primary Input
-          timeoutCntGen = TIMEOUT;
-        #endif
-        #if defined(DUAL_INPUTS) && ((defined(CONTROL_PPM_LEFT)  && CONTROL_PPM_LEFT == 1) || (defined(CONTROL_PPM_RIGHT) && CONTROL_PPM_RIGHT == 1) || \
-                                     (defined(CONTROL_PWM_LEFT)  && CONTROL_PWM_LEFT == 1) || (defined(CONTROL_PWM_RIGHT) && CONTROL_PWM_RIGHT == 1))
-          inIdx = 0;                                    // Switch to Primary input in case of Timeout on Auxiliary input
-        #endif
-      } else {
-        #if defined(DUAL_INPUTS) && ((defined(CONTROL_PPM_LEFT)  && CONTROL_PPM_LEFT == 1) || (defined(CONTROL_PPM_RIGHT) && CONTROL_PPM_RIGHT == 1) || \
-                                     (defined(CONTROL_PWM_LEFT)  && CONTROL_PWM_LEFT == 1) || (defined(CONTROL_PWM_RIGHT) && CONTROL_PWM_RIGHT == 1))
-          inIdx = 1;                                    // Switch to Auxiliary input in case of NO Timeout on Auxiliary input
-        #endif
-      }
     #endif
 
     // In case of timeout bring the system to a Safe State
@@ -1134,32 +636,55 @@ void readCommand(void) {
     #endif
 
     handleTimeout();
-
-    #ifdef VARIANT_HOVERCAR
-    if (inIdx == CONTROL_ADC) {
-      brakePressed = (uint8_t)(input1[inIdx].cmd > 50);
-    }
-    else {
-      brakePressed = (uint8_t)(input2[inIdx].cmd < -50);
-    }
-    #endif
-
-    #if defined(SUPPORT_BUTTONS_LEFT) || defined(SUPPORT_BUTTONS_RIGHT)
-      button1 = !HAL_GPIO_ReadPin(BUTTON1_PORT, BUTTON1_PIN);
-      button2 = !HAL_GPIO_ReadPin(BUTTON2_PORT, BUTTON2_PIN);
-    #endif
-
-    #if defined(CRUISE_CONTROL_SUPPORT) && (defined(SUPPORT_BUTTONS) || defined(SUPPORT_BUTTONS_LEFT) || defined(SUPPORT_BUTTONS_RIGHT))
-        cruiseControl(button1);                                           // Cruise control activation/deactivation
-    #endif
 }
 
+
+void KiSC_process_command(char *data, KiSCCommand *cmd) {
+    switch (data[2]) {
+      case HOVER_CMD_MOTORCTRL:
+        cmd->left.mode = (data[7] & 12) >> 2;
+        cmd->left.type = (data[7] & 48) >> 4;
+        cmd->right.mode = (data[10] & 12) >> 2;
+        cmd->right.type = (data[10] & 48) >> 4;
+        cmd->left.target = (int16_t)(data[5] << 8 | (data[6]));
+        cmd->right.target = (int16_t)(data[8] << 8 | (data[9]));
+        cmd->left.enable = data[7] & 1;
+        cmd->right.enable = data[10] & 1;
+        cmd->left.direction = (data[7] & 2) >> 1;
+        cmd->right.direction = (data[10] & 2) >> 1;
+        break;
+      case HOVER_CMD_POWER:
+        if (data[4] == 0xAA) {
+          beepShort(4);                     // make 2 beeps indicating the motor enable
+          beepShort(6); 
+          beepShort(6); 
+          HAL_Delay(100);
+          poweroff();
+        }
+
+        break;
+      case HOVER_CMD_BUZZER:
+        beepCount(1, data[4], data[5]);
+        break;
+      case HOVER_CMD_SETTINGS:
+        KiSC_Settings.maxCurrrent   = (int16_t)(data[4] << 8 | (data[5]));
+        KiSC_Settings.maxSpeed      = (int16_t)(data[6] << 8 | (data[7]));
+        KiSC_Settings.eBrake        = data[8];
+        KiSC_Settings.parkingbrake  = data[9];
+
+//       max_speed = MULTI_MODE_DRIVE_M1_MAX;
+//      rate = MULTI_MODE_DRIVE_M1_RATE;
+//      rtP_Left.n_max = rtP_Right.n_max = MULTI_MODE_M1_N_MOT_MAX << 4;
+//      rtP_Left.i_max = rtP_Right.i_max = (MULTI_MODE_M1_I_MOT_MAX * A2BIT_CONV) << 4;
+        
+        break;
+    }
+}
 
 /*
  * Check for new data received on USART2 with DMA: refactored function from https://github.com/MaJerle/stm32-usart-uart-dma-rx-tx
  * - this function is called for every USART IDLE line detection, in the USART interrupt handler
  */
-#if 1
 void usart_process_data(char *data, int16_t len) {
     static uint8_t ptr_raw[SERIAL_BUFFER_SIZE];
     static uint8_t inComingPrev = 0;
@@ -1191,6 +716,7 @@ void usart_process_data(char *data, int16_t len) {
             if (checksum == ptr_raw[len - 1]) {
               timeoutFlgSerial_L = 0;         // Clear timeout flag
               timeoutCntSerial_L = 0;         // Reset timeout counter
+              KiSC_process_command((SerialCommand *)ptr_raw, &KiSC_Command);
 //              usart_process_command((SerialCommand *)ptr_raw, &commandL, 2);
             }
             idx = 0;
@@ -1204,8 +730,8 @@ void usart_process_data(char *data, int16_t len) {
         // Check if the checksum is correct
        // if (commandL_raw.checksum == calculateCommandChecksum(commandL_raw)) {
 //            usart_process_command(&commandL_raw, &commandL, 2);
-        timeoutFlgSerial_L = 0;         // Clear timeout flag
-        timeoutCntSerial_L = 0;         // Reset timeout counter
+//        timeoutFlgSerial_L = 0;         // Clear timeout flag
+//        timeoutCntSerial_L = 0;         // Reset timeout counter
 
         //}
     }
@@ -1268,159 +794,13 @@ void usart2_rx_check(void) {
         old_pos = pos;                          /* Save current position as old for next transfers */
     }
 }
-#else
-void usart2_rx_check(void)
-{
-  #if defined(DEBUG_SERIAL_USART2) || defined(CONTROL_SERIAL_USART2) || defined(SIDEBOARD_SERIAL_USART2)  
-  static uint32_t old_pos;
-  uint32_t pos;
-  pos = rx_buffer_L_len - __HAL_DMA_GET_COUNTER(huart2.hdmarx);         // Calculate current position in buffer
-  #endif
-
-  #if defined(DEBUG_SERIAL_USART2)
-  uint8_t ptr_debug[SERIAL_BUFFER_SIZE];
-  if (pos != old_pos) {                                                 // Check change in received data
-    if (pos > old_pos) {                                                // "Linear" buffer mode: check if current position is over previous one
-      usart_process_debug(&rx_buffer_L[old_pos], pos - old_pos);        // Process data
-    } else {                                                            // "Overflow" buffer mode
-      memcpy(&ptr_debug[0], &rx_buffer_L[old_pos], rx_buffer_L_len - old_pos);    // First copy data from the end of buffer
-      if (pos > 0) {                                                    // Check and continue with beginning of buffer
-        memcpy(&ptr_debug[rx_buffer_L_len - old_pos], &rx_buffer_L[0], pos);                              // Copy remaining data
-      }
-      usart_process_debug(ptr_debug, rx_buffer_L_len - old_pos + pos);        // Process data
-    }
-  }
-  #endif // DEBUG_SERIAL_USART2
-
-  #ifdef CONTROL_SERIAL_USART2
-  uint8_t *ptr;	
-  if (pos != old_pos) {                                                 // Check change in received data
-    ptr = (uint8_t *)&commandL_raw;                                     // Initialize the pointer with command_raw address
-    if (pos > old_pos && (pos - old_pos) == commandL_len) {             // "Linear" buffer mode: check if current position is over previous one AND data length equals expected length
-      memcpy(ptr, &rx_buffer_L[old_pos], commandL_len);                 // Copy data. This is possible only if command_raw is contiguous! (meaning all the structure members have the same size)
-      usart_process_command(&commandL_raw, &commandL, 2);               // Process data
-    } else if ((rx_buffer_L_len - old_pos + pos) == commandL_len) {     // "Overflow" buffer mode: check if data length equals expected length
-      memcpy(ptr, &rx_buffer_L[old_pos], rx_buffer_L_len - old_pos);    // First copy data from the end of buffer
-      if (pos > 0) {                                                    // Check and continue with beginning of buffer
-        ptr += rx_buffer_L_len - old_pos;                               // Move to correct position in command_raw
-        memcpy(ptr, &rx_buffer_L[0], pos);                              // Copy remaining data
-      }
-      usart_process_command(&commandL_raw, &commandL, 2);               // Process data
-    }
-  }
-  #endif // CONTROL_SERIAL_USART2
-  #ifdef SIDEBOARD_SERIAL_USART2
-  uint8_t *ptr;	
-  if (pos != old_pos) {                                                 // Check change in received data
-    ptr = (uint8_t *)&Sideboard_L_raw;                                  // Initialize the pointer with Sideboard_raw address
-    if (pos > old_pos && (pos - old_pos) == Sideboard_L_len) {          // "Linear" buffer mode: check if current position is over previous one AND data length equals expected length
-      memcpy(ptr, &rx_buffer_L[old_pos], Sideboard_L_len);              // Copy data. This is possible only if Sideboard_raw is contiguous! (meaning all the structure members have the same size)
-      usart_process_sideboard(&Sideboard_L_raw, &Sideboard_L, 2);       // Process data
-    } else if ((rx_buffer_L_len - old_pos + pos) == Sideboard_L_len) {  // "Overflow" buffer mode: check if data length equals expected length
-      memcpy(ptr, &rx_buffer_L[old_pos], rx_buffer_L_len - old_pos);    // First copy data from the end of buffer
-      if (pos > 0) {                                                    // Check and continue with beginning of buffer
-        ptr += rx_buffer_L_len - old_pos;                               // Move to correct position in Sideboard_raw
-        memcpy(ptr, &rx_buffer_L[0], pos);                              // Copy remaining data
-      }
-      usart_process_sideboard(&Sideboard_L_raw, &Sideboard_L, 2);       // Process data
-    }
-  }
-  #endif // SIDEBOARD_SERIAL_USART2
-
-  #if defined(DEBUG_SERIAL_USART2) || defined(CONTROL_SERIAL_USART2) || defined(SIDEBOARD_SERIAL_USART2)
-  old_pos = pos;                                                        // Update old position
-  if (old_pos == rx_buffer_L_len) {                                     // Check and manually update if we reached end of buffer
-    old_pos = 0;
-  }
-	#endif
-}
-#endif
-
-
 /*
  * Check for new data received on USART3 with DMA: refactored function from https://github.com/MaJerle/stm32-usart-uart-dma-rx-tx
  * - this function is called for every USART IDLE line detection, in the USART interrupt handler
  */
 void usart3_rx_check(void)
 {
-  #if defined(DEBUG_SERIAL_USART3) || defined(CONTROL_SERIAL_USART3) || defined(SIDEBOARD_SERIAL_USART3)
-  static uint32_t old_pos;
-  uint32_t pos;  
-  pos = rx_buffer_R_len - __HAL_DMA_GET_COUNTER(huart3.hdmarx);         // Calculate current position in buffer
-  #endif
-
-  #if defined(DEBUG_SERIAL_USART3)
-  uint8_t ptr_debug[SERIAL_BUFFER_SIZE];
-
-  if (pos != old_pos) {                                                 // Check change in received data
-    if (pos > old_pos) {                                                // "Linear" buffer mode: check if current position is over previous one
-      usart_process_debug(&rx_buffer_R[old_pos], pos - old_pos);        // Process data
-    } else {                                                            // "Overflow" buffer mode
-      memcpy(&ptr_debug[0], &rx_buffer_R[old_pos], rx_buffer_R_len - old_pos);    // First copy data from the end of buffer
-      if (pos > 0) {                                                    // Check and continue with beginning of buffer
-        memcpy(&ptr_debug[rx_buffer_R_len - old_pos], &rx_buffer_R[0], pos);                              // Copy remaining data
-      }
-      usart_process_debug(ptr_debug, rx_buffer_R_len - old_pos + pos);        // Process data
-    }
-  }
-  #endif // DEBUG_SERIAL_USART3
-
-  #ifdef CONTROL_SERIAL_USART3
-  uint8_t *ptr;
-  if (pos != old_pos) {                                                 // Check change in +received data
-    ptr = (uint8_t *)&commandR_raw;                                     // Initialize the pointer with command_raw address
-    if (pos > old_pos && (pos - old_pos) == commandR_len) {             // "Linear" buffer mode: check if current position is over previous one AND data length equals expected length
-      memcpy(ptr, &rx_buffer_R[old_pos], commandR_len);                 // Copy data. This is possible only if command_raw is contiguous! (meaning all the structure members have the same size)
-      usart_process_command(&commandR_raw, &commandR, 3);               // Process data
-    } else if ((rx_buffer_R_len - old_pos + pos) == commandR_len) {     // "Overflow" buffer mode: check if data length equals expected length
-      memcpy(ptr, &rx_buffer_R[old_pos], rx_buffer_R_len - old_pos);    // First copy data from the end of buffer
-      if (pos > 0) {                                                    // Check and continue with beginning of buffer
-        ptr += rx_buffer_R_len - old_pos;                               // Move to correct position in command_raw
-        memcpy(ptr, &rx_buffer_R[0], pos);                              // Copy remaining data
-      }
-      usart_process_command(&commandR_raw, &commandR, 3);               // Process data
-    }
-  }
-  #endif // CONTROL_SERIAL_USART3
-
-  #ifdef SIDEBOARD_SERIAL_USART3
-  uint8_t *ptr;
-  if (pos != old_pos) {                                                 // Check change in received data
-    ptr = (uint8_t *)&Sideboard_R_raw;                                  // Initialize the pointer with Sideboard_raw address
-    if (pos > old_pos && (pos - old_pos) == Sideboard_R_len) {          // "Linear" buffer mode: check if current position is over previous one AND data length equals expected length
-      memcpy(ptr, &rx_buffer_R[old_pos], Sideboard_R_len);              // Copy data. This is possible only if Sideboard_raw is contiguous! (meaning all the structure members have the same size)
-      usart_process_sideboard(&Sideboard_R_raw, &Sideboard_R, 3);       // Process data
-    } else if ((rx_buffer_R_len - old_pos + pos) == Sideboard_R_len) {  // "Overflow" buffer mode: check if data length equals expected length
-      memcpy(ptr, &rx_buffer_R[old_pos], rx_buffer_R_len - old_pos);    // First copy data from the end of buffer
-      if (pos > 0) {                                                    // Check and continue with beginning of buffer
-        ptr += rx_buffer_R_len - old_pos;                               // Move to correct position in Sideboard_raw
-        memcpy(ptr, &rx_buffer_R[0], pos);                              // Copy remaining data
-      }
-      usart_process_sideboard(&Sideboard_R_raw, &Sideboard_R, 3);       // Process data
-    }
-  }
-  #endif // SIDEBOARD_SERIAL_USART3
-
-  #if defined(DEBUG_SERIAL_USART3) || defined(CONTROL_SERIAL_USART3) || defined(SIDEBOARD_SERIAL_USART3)
-  old_pos = pos;                                                        // Update old position
-  if (old_pos == rx_buffer_R_len) {                                     // Check and manually update if we reached end of buffer
-    old_pos = 0;
-  }
-  #endif
 }
-
-/*
- * Process Rx debug user command input
- */
-#if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-void usart_process_debug(uint8_t *userCommand, uint32_t len)
-{
-  #ifdef DEBUG_SERIAL_PROTOCOL
-    handle_input(userCommand, len);
-  #endif
-}
-
-#endif // SERIAL_DEBUG
 
 /*
  * Process command Rx data
@@ -1429,42 +809,10 @@ void usart_process_debug(uint8_t *userCommand, uint32_t len)
 #if defined(CONTROL_SERIAL_USART2) || defined(CONTROL_SERIAL_USART3)
 void usart_process_command(SerialCommand *command_in, SerialCommand *command_out, uint8_t usart_idx)
 {
-  #ifdef CONTROL_IBUS
-    uint16_t ibus_chksum;
-    if (command_in->start == IBUS_LENGTH && command_in->type == IBUS_COMMAND) {
-      ibus_chksum = 0xFFFF - IBUS_LENGTH - IBUS_COMMAND;
-      for (uint8_t i = 0; i < (IBUS_NUM_CHANNELS * 2); i++) {
-        ibus_chksum -= command_in->channels[i];
-      }
-      if (ibus_chksum == (uint16_t)((command_in->checksumh << 8) + command_in->checksuml)) {
-        *command_out = *command_in;
-        if (usart_idx == 2) {             // Sideboard USART2
-          #ifdef CONTROL_SERIAL_USART2
-          timeoutFlgSerial_L = 0;         // Clear timeout flag
-          timeoutCntSerial_L = 0;         // Reset timeout counter
-          #endif
-        } else if (usart_idx == 3) {      // Sideboard USART3
-          #ifdef CONTROL_SERIAL_USART3
-          timeoutFlgSerial_R = 0;         // Clear timeout flag
-          timeoutCntSerial_R = 0;         // Reset timeout counter
-          #endif
-        }
-      }
-    }
-  #else
   uint16_t checksum;
-#ifdef VARIANT_KiSC    
   if (command_in->start == VALID_HEADER) {
       checksum = VALID_HEADER;
 //    checksum = calculateCommandChecksum(*command_in);
-#else    
-  if (command_in->start == SERIAL_START_FRAME) {
-#ifdef ESP32_USART_CONTROL
-    checksum = (uint16_t)(command_in->start ^ command_in->steer ^ command_in->speed ^ command_in->uiControl);
-#else
-    checksum = (uint16_t)(command_in->start ^ command_in->steer ^ command_in->speed);
-#endif
-#endif
     if (command_in->checksum == checksum) {
       *command_out = *command_in;
       if (usart_idx == 2) {             // Sideboard USART2
@@ -1472,224 +820,15 @@ void usart_process_command(SerialCommand *command_in, SerialCommand *command_out
         timeoutFlgSerial_L = 0;         // Clear timeout flag
         timeoutCntSerial_L = 0;         // Reset timeout counter
         #endif
-      } else if (usart_idx == 3) {      // Sideboard USART3
-        #ifdef CONTROL_SERIAL_USART3
-        timeoutFlgSerial_R = 0;         // Clear timeout flag
-        timeoutCntSerial_R = 0;         // Reset timeout counter
-        #endif
+      }
       }
     } else {
     }
 
   }
-  #endif
-}
+
+
 #endif
-
-/*
- * Process Sideboard Rx data
- * - if the Sideboard_in data is valid (correct START_FRAME and checksum) copy the Sideboard_in to Sideboard_out
- */
-#if defined(SIDEBOARD_SERIAL_USART2) || defined(SIDEBOARD_SERIAL_USART3)
-void usart_process_sideboard(SerialSideboard *Sideboard_in, SerialSideboard *Sideboard_out, uint8_t usart_idx)
-{
-  uint16_t checksum;
-  if (Sideboard_in->start == SERIAL_START_FRAME) {
-    checksum = (uint16_t)(Sideboard_in->start ^ Sideboard_in->pitch ^ Sideboard_in->dPitch ^ Sideboard_in->cmd1 ^ Sideboard_in->cmd2 ^ Sideboard_in->sensors);
-    if (Sideboard_in->checksum == checksum) {
-      *Sideboard_out = *Sideboard_in;
-      if (usart_idx == 2) {             // Sideboard USART2
-        #ifdef SIDEBOARD_SERIAL_USART2
-        timeoutCntSerial_L  = 0;        // Reset timeout counter
-        timeoutFlgSerial_L = 0;         // Clear timeout flag
-        #endif
-      } else if (usart_idx == 3) {      // Sideboard USART3
-        #ifdef SIDEBOARD_SERIAL_USART3
-        timeoutCntSerial_R = 0;         // Reset timeout counter
-        timeoutFlgSerial_R = 0;         // Clear timeout flag
-        #endif
-      }
-    }
-  }
-}
-#endif
-
-
-/* =========================== Sideboard Functions =========================== */
-
-/*
- * Sideboard LEDs Handling
- * This function manages the leds behavior connected to the sideboard
- */
-void sideboardLeds(uint8_t *leds) {
-  #if defined(SIDEBOARD_SERIAL_USART2) || defined(SIDEBOARD_SERIAL_USART3)
-    // Enable flag: use LED4 (bottom Blue)
-    // enable == 1, turn on led
-    // enable == 0, blink led
-    if (enable) {
-      *leds |= LED4_SET;
-    } else if (!enable && (main_loop_counter % 20 == 0)) {
-      *leds ^= LED4_SET;
-    }
-
-    // Backward Drive: use LED5 (upper Blue)
-    // backwardDrive == 1, blink led
-    // backwardDrive == 0, turn off led
-    if (backwardDrive && (main_loop_counter % 50 == 0)) {
-      *leds ^= LED5_SET;
-    }
-
-    // Brake: use LED5 (upper Blue)
-    // brakePressed == 1, turn on led
-    // brakePressed == 0, turn off led
-    #ifdef VARIANT_HOVERCAR
-      if (brakePressed) {
-        *leds |= LED5_SET;
-      } else if (!brakePressed && !backwardDrive) {
-        *leds &= ~LED5_SET;
-      }
-    #endif
-
-    // Battery Level Indicator: use LED1, LED2, LED3
-    if (main_loop_counter % BAT_BLINK_INTERVAL == 0) {              //  | RED (LED1) | YELLOW (LED3) | GREEN (LED2) |
-      if (batVoltage < BAT_DEAD) {                                  //  |     0      |       0       |      0       |
-        *leds &= ~LED1_SET & ~LED3_SET & ~LED2_SET;
-      } else if (batVoltage < BAT_LVL1) {                           //  |     B      |       0       |      0       |
-        *leds ^= LED1_SET;
-        *leds &= ~LED3_SET & ~LED2_SET;
-      } else if (batVoltage < BAT_LVL2) {                           //  |     1      |       0       |      0       |
-        *leds |= LED1_SET;
-        *leds &= ~LED3_SET & ~LED2_SET;
-      } else if (batVoltage < BAT_LVL3) {                           //  |     0      |       B       |      0       |
-        *leds ^= LED3_SET;
-        *leds &= ~LED1_SET & ~LED2_SET;
-      } else if (batVoltage < BAT_LVL4) {                           //  |     0      |       1       |      0       |
-        *leds |= LED3_SET;
-        *leds &= ~LED1_SET & ~LED2_SET;
-      } else if (batVoltage < BAT_LVL5) {                           //  |     0      |       0       |      B       |
-        *leds ^= LED2_SET;
-        *leds &= ~LED1_SET & ~LED3_SET;
-      } else {                                                      //  |     0      |       0       |      1       |
-        *leds |= LED2_SET;
-        *leds &= ~LED1_SET & ~LED3_SET;
-      }
-    }
-
-    // Error handling
-    // Critical error:  LED1 on (RED)     + high pitch beep (hadled in main)
-    // Soft error:      LED3 on (YELLOW)  + low  pitch beep (hadled in main)
-    if (rtY_Left.z_errCode || rtY_Right.z_errCode) {
-      *leds |= LED1_SET;
-      *leds &= ~LED3_SET & ~LED2_SET;
-    }
-    if (timeoutFlgADC || timeoutFlgSerial) {
-      *leds |= LED3_SET;
-      *leds &= ~LED1_SET & ~LED2_SET;
-    }
-  #endif
-}
-
-/*
- * Sideboard Sensor Handling
- * This function manages the sideboards photo sensors.
- * In non-hoverboard variants, the sensors are used as push buttons.
- */
-void sideboardSensors(uint8_t sensors) {
-  #if !defined(VARIANT_HOVERBOARD) && (defined(SIDEBOARD_SERIAL_USART2) || defined(SIDEBOARD_SERIAL_USART3))
-    static uint8_t sensor1_index;                                 // holds the press index number for sensor1, when used as a button
-    static uint8_t sensor1_prev,  sensor2_prev;
-    uint8_t sensor1_trig = 0, sensor2_trig = 0;
-    #if defined(SIDEBOARD_SERIAL_USART2)
-    uint8_t  sideboardIdx = SIDEBOARD_SERIAL_USART2;
-    uint16_t sideboardSns = Sideboard_L.sensors;
-    #else
-    uint8_t  sideboardIdx = SIDEBOARD_SERIAL_USART3;
-    uint16_t sideboardSns = Sideboard_R.sensors;
-    #endif
-
-    if (inIdx == sideboardIdx) {                                  // Use Sideboard data
-      sensor1_index = 2 + ((sideboardSns & SWB_SET) >> 9);        // SWB on RC transmitter is used to change Control Type
-      if (sensor1_index == 2) {                                   // FOC control Type
-        sensor1_index = (sideboardSns & SWC_SET) >> 11;           // SWC on RC transmitter is used to change Control Mode
-      }
-      sensor1_trig  = sensor1_index != sensor1_prev;              // rising or falling edge change detection
-      if (inIdx != inIdx_prev) {                                  // Force one update at Input idx change
-        sensor1_trig  = 1;
-      }
-      sensor1_prev  = sensor1_index;
-    } else {                                                      // Use Optical switches
-      sensor1_trig  = (sensors & SENSOR1_SET) && !sensor1_prev;   // rising edge detection
-      sensor1_prev  =  sensors & SENSOR1_SET;
-    }
-
-    // Control MODE and Control Type Handling
-    if (sensor1_trig) {
-      switch (sensor1_index) {
-        case 0:     // FOC VOLTAGE
-          rtP_Left.z_ctrlTypSel = rtP_Right.z_ctrlTypSel = FOC_CTRL;
-          ctrlModReqRaw         = VLT_MODE;
-          break;
-        case 1:     // FOC SPEED
-          rtP_Left.z_ctrlTypSel = rtP_Right.z_ctrlTypSel = FOC_CTRL;
-          ctrlModReqRaw         = SPD_MODE;
-          break;
-        case 2:     // FOC TORQUE
-          rtP_Left.z_ctrlTypSel = rtP_Right.z_ctrlTypSel = FOC_CTRL;
-          ctrlModReqRaw         = TRQ_MODE;
-          break;
-        case 3:     // SINUSOIDAL
-          rtP_Left.z_ctrlTypSel = rtP_Right.z_ctrlTypSel = SIN_CTRL;
-          break;
-        case 4:     // COMMUTATION
-          rtP_Left.z_ctrlTypSel = rtP_Right.z_ctrlTypSel = COM_CTRL;
-          break;
-      }
-      if (inIdx == inIdx_prev) { beepShortMany(sensor1_index + 1, 1); }
-      if (++sensor1_index > 4) { sensor1_index = 0; }
-    }
-
-                                                             // Field Weakening Activation/Deactivation
-      static uint8_t  sensor2_index = 1;                          // holds the press index number for sensor2, when used as a button
-
-      // Override in case the Sideboard control is Active
-      if (inIdx == sideboardIdx) {                                // Use Sideboard data
-        sensor2_index = (sideboardSns & SWD_SET) >> 13;           // SWD on RC transmitter is used to Activate/Deactivate Field Weakening
-        sensor2_trig  = sensor2_index != sensor2_prev;            // rising or falling edge change detection
-        if (inIdx != inIdx_prev) {                                // Force one update at Input idx change
-          sensor2_trig  = 1;
-        }
-        sensor2_prev  = sensor2_index;
-      }else{
-        sensor2_trig  = (sensors & SENSOR2_SET) && !sensor2_prev;   // rising edge detection
-        sensor2_prev  =  sensors & SENSOR2_SET;
-      }
-
-      #ifdef CRUISE_CONTROL_SUPPORT                                 // Cruise Control Activation/Deactivation
-        if (sensor2_trig) {
-          cruiseControl(sensor2_trig);
-        }
-      #else
-        if (sensor2_trig) {
-          switch (sensor2_index) {
-            case 0:     // FW Disabled
-              rtP_Left.b_fieldWeakEna  = 0; 
-              rtP_Right.b_fieldWeakEna = 0;
-              Input_Lim_Init();
-              break;
-            case 1:     // FW Enabled
-              rtP_Left.b_fieldWeakEna  = 1; 
-              rtP_Right.b_fieldWeakEna = 1;
-              Input_Lim_Init();
-              break; 
-          }
-          if (inIdx == inIdx_prev) { beepShortMany(sensor2_index + 1, 1); }
-          if (++sensor2_index > 1) { sensor2_index = 0; }
-        }
-      #endif  // CRUISE_CONTROL_SUPPORT
-  #endif
-}
-
-
 
 /* =========================== Poweroff Functions =========================== */
 
@@ -1698,18 +837,8 @@ void sideboardSensors(uint8_t sensors) {
  * This function makes sure data is not lost after power-off
  */
 void saveConfig() {
-  #ifdef VARIANT_TRANSPOTTER
-    if (saveValue_valid) {
-      HAL_FLASH_Unlock();
-      EE_WriteVariable(VirtAddVarTab[0], saveValue);
-      HAL_FLASH_Lock();
-    }
-  #endif
   #if !defined(VARIANT_HOVERBOARD) && !defined(VARIANT_TRANSPOTTER)
     if (inp_cal_valid || cur_spd_valid) {
-      #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-        printf("Saving configuration to EEprom\r\n");
-      #endif
 
       HAL_FLASH_Unlock();
       EE_WriteVariable(VirtAddVarTab[0] , (uint16_t)FLASH_WRITE_KEY);
@@ -1733,9 +862,6 @@ void saveConfig() {
 
 void poweroff(void) {
   enable = 0;
-  #if defined(DEBUG_SERIAL_USART2) || defined(DEBUG_SERIAL_USART3)
-  printf("-- Motors disabled --\r\n");
-  #endif
 /*  
   buzzerCount = 0;  // prevent interraction with beep counter
   buzzerPattern = 0;
@@ -1784,34 +910,7 @@ void poweroffPressCheck(void) {
       poweroff();
       }
     }
-  #elif defined(VARIANT_TRANSPOTTER)
-    if(HAL_GPIO_ReadPin(BUTTON_PORT, BUTTON_PIN)) {
-      enable = 0;
-      while(HAL_GPIO_ReadPin(BUTTON_PORT, BUTTON_PIN)) { HAL_Delay(10); }
-      beepShort(5);
-      HAL_Delay(300);
-      if (HAL_GPIO_ReadPin(BUTTON_PORT, BUTTON_PIN)) {
-        while(HAL_GPIO_ReadPin(BUTTON_PORT, BUTTON_PIN)) { HAL_Delay(10); }
-        beepLong(5);
-        HAL_Delay(350);
-        poweroff();
-      } else {
-        setDistance += 0.25;
-        if (setDistance > 2.6) {
-          setDistance = 0.5;
-        }
-        beepShort(setDistance / 0.25);
-        saveValue = setDistance * 1000;
-        saveValue_valid = 1;
-      }
-    }
-  #else
-    if (HAL_GPIO_ReadPin(BUTTON_PORT, BUTTON_PIN)) {
-      enable = 0;                                             // disable motors
-      while (HAL_GPIO_ReadPin(BUTTON_PORT, BUTTON_PIN)) {}    // wait until button is released
-      poweroff();                                             // release power-latch
-    }
-  #endif
+#endif    
 }
 
 
