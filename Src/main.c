@@ -190,7 +190,7 @@ int main(void) {
   KiSC_Command.left.enable = KiSC_Command.right.enable = 0;
   KiSC_Command.left.mode = KiSC_Command.right.mode = FOC_CTRL;
   KiSC_Command.left.type = KiSC_Command.right.type = TRQ_MODE;
-  
+
 
   #ifdef MULTI_MODE_DRIVE
     if (adc_buffer.l_tx2 > input1[0].min + 50 && adc_buffer.l_rx2 > input2[0].min + 50) {
@@ -429,6 +429,23 @@ int main(void) {
 
         cmdL = KiSC_Command.left.target;
         cmdR = KiSC_Command.right.target;
+        if (cmdL > 15)
+          cmdL = 15;
+        if (cmdR > 15)
+          cmdR = 15;
+        if (cmdL < -15)
+          cmdL = -15;
+        if (cmdR < -15)
+          cmdR = -15;
+        if (KiSC_Command.left.enable == 0) {
+          cmdL = 0;
+        }
+        if (KiSC_Command.right.enable == 0) {
+          cmdR = 0;
+        }
+        
+
+
         input1[inIdx].cmd = cmdL;
         input2[inIdx].cmd = cmdR;
 
@@ -454,12 +471,14 @@ int main(void) {
 
     // ####### FEEDBACK SERIAL OUT #######
     #if defined(FEEDBACK_SERIAL_USART2) || defined(FEEDBACK_SERIAL_USART3)
-      if (main_loop_counter % 2 == 0) {    // Send data periodically every 10 ms
+      if (main_loop_counter % 4 == 0) {    // Send data periodically every 10 ms
         #if defined(FEEDBACK_SERIAL_USART2)
-            if (main_loop_counter % 10 == 0) {    // Abwechselnd Motor Status, Status
-                uint8_t buf[HOVER_CMD_STATUS];
-                buf[0] = (HOVER_VALID_HEADER && 0xFF00) >> 8;
-                buf[1] = HOVER_VALID_HEADER & 0xFF;
+            if (main_loop_counter % 16 == 0) {    // Abwechselnd Motor Status, Status
+                uint8_t buf[HOVER_CMD_STATUS_SIZE+5];
+                buf[0] = 0xAB;
+                buf[1] = 0xCE;
+//                buf[0] = (HOVER_VALID_HEADER & 0xFF00) >> 8;
+//                buf[1] = HOVER_VALID_HEADER & 0xFF;
                 buf[2] = HOVER_CMD_STATUS;
                 buf[3] = sizeof(buf);
                 buf[4] = (int16_t)(batVoltageCalib & 0xFF00) >> 8;
@@ -496,9 +515,11 @@ int main(void) {
                 HAL_UART_Transmit_DMA(&huart2, buf, sizeof(buf));
 
             } else {
-                uint8_t buf[HOVER_CMD_MOTORSTAT_SIZE];
-                buf[0] = (HOVER_VALID_HEADER && 0xFF00) >> 8;
-                buf[1] = HOVER_VALID_HEADER & 0xFF;
+                uint8_t buf[HOVER_CMD_MOTORSTAT_SIZE+5];
+//                buf[0] = (HOVER_VALID_HEADER & 0xFF00) >> 8;
+//                buf[1] = HOVER_VALID_HEADER & 0xFF;
+                buf[0] = 0xAB;
+                buf[1] = 0xCE;
                 buf[2] = HOVER_CMD_MOTORSTAT;
                 buf[3] = sizeof(buf);
 
